@@ -1,0 +1,517 @@
+"""RFE response builder — one entry point.
+
+Usage:
+  python rfe.py check                    is the API key valid? (free)
+  python rfe.py preview [case_dir]      parse + locate + checklist, offline (free)
+  python rfe.py judge [case_dir]        AI coverage judgement (billable;
+                                        observed: the judge question was
+                                        not billed)
+  python rfe.py draft [case_dir]        judge + upload + AI draft, then stop
+                                        for human review (billable; observed:
+                                        a full run billed 1 operation)
+  python rfe.py decide approve|reject   apply the human decision, export,
+                                        verify (applying and exporting are
+                                        free; a feedback round that makes
+                                        the model redraft may bill — see
+                                        the Billing tab)
+
+A case_dir holds two folders: notice/ (the officer's letter, exactly one
+file) and petition/ (the original petition documents). Default: ./data
+Supported formats: .md .txt .pdf .docx
+
+Actual charges appear in the SuperDocs Billing tab; ops_spent here is a
+cap counter, not a bill.
+
+The same five operations are exposed as MCP tools by mcp_server.py — both
+doors call the core functions in this file; there is no second
+implementation.
+"""
+import json
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+
+from engine.citations_from_export import (
+    cited_sections_from_export,
+    missing_citation_failures,
+)
+from engine.coverage_checklist import build_checklist
+from engine.draft_instruction import build_draft_instruction
+from engine.judge_coverage import (
+    build_judge_instruction,
+    judged_checklist,
+    parse_judge_reply,
+)
+from engine.load_corpus import petition_sections, read_notice, read_petition
+from engine.model import ChecklistRow, Coverage
+from engine.requests_from_notice import parse_notice
+from engine.response_skeleton import build_skeleton
+from engine.retrieve_petition_material import load_retrieval_config, retrieve
+from engine.verify_citations import find_citation_failures
+from engine.verify_export import verify_export
+from superdocs.client import (
+    OperationBudget,
+    SuperDocsClient,
+    TERMINAL_JOB_STATUSES,
+    read_env,
+)
+from superdocs.errors import SuperDocsError
+
+MODEL_TIER = "core"
+DEAD_JOB_STATUSES = TERMINAL_JOB_STATUSES - {"completed"}
+MAX_JOB_WAIT_SECONDS = 420
+ATTACHMENT_WAIT_SECONDS = 90
+OUT = ROOT / "output"
+STATE_FILE = OUT / "run_state.json"
+
+COVERAGE_LABEL = {
+    Coverage.ANSWERED: "Answered — petition material found",
+    Coverage.PARTIAL: "Partially — new evidence needed",
+    Coverage.NOT_PROVIDED: "Not provided — needs attorney confirmation",
+}
+
+
+def load_case(case_dir: Path):
+    requests = parse_notice(read_notice(case_dir / "notice"))
+    petition = read_petition(case_dir / "petition")
+    config = load_retrieval_config(ROOT / "config" / "retrieval.json")
+    matches = retrieve(requests, petition_sections(petition), config)
+    return requests, petition, config, matches
+
+
+def make_client() -> SuperDocsClient:
+    env = read_env(ROOT / ".env")
+    return SuperDocsClient(
+        env.get("SUPERDOCS_API_KEY", ""),
+        OperationBudget(int(env.get("MAX_OPS_PER_RUN", "5"))),
+    )
+
+
+def judged_or_lexical_checklist(client, requests, matches, config, session_id, notes):
+    lexical = build_checklist(requests, matches, config)
+    try:
+        reply = client.ask(
+            session_id, build_judge_instruction(requests, matches), MODEL_TIER
+        )
+        judged = judged_checklist(requests, matches, parse_judge_reply(reply, requests))
+        notes.append("coverage judged by the model")
+        return judged
+    except (SuperDocsError, ValueError) as e:
+        # a judging failure downgrades the run, never kills it
+        notes.append(f"coverage judge unavailable — using the locator's buckets ({e})")
+        return lexical
+
+
+def wait_for_attachments(client, session_id: str, notes, max_wait_seconds: int = ATTACHMENT_WAIT_SECONDS) -> None:
+    waited = 0
+    while waited < max_wait_seconds:
+        status = client.attachment_status(session_id)
+        # processing_jobs keeps finished history; the live counters decide
+        if status.get("total_ready", 0) > 0 and status.get("total_processing", 0) == 0:
+            notes.append(f"attachments processed: {status['total_ready']}")
+            return
+        time.sleep(3)
+        waited += 3
+    # attachments are an enrichment; a slow processing queue must not
+    # block the draft, the excerpts in the skeleton still carry the run
+    notes.append("attachments still processing — continuing; the skeleton's excerpts carry the draft")
+
+
+def dump_pending_changes(job: dict) -> int:
+    pending = (job.get("metadata") or {}).get("pending_changes") or []
+    (OUT / "pending_changes.json").write_text(
+        json.dumps(pending, indent=2), encoding="utf-8"
+    )
+    lines = ["# Proposed changes awaiting review", ""]
+    for i, change in enumerate(pending, 1):
+        lines.append(f"## Change {i} — id `{change.get('change_id')}`")
+        lines.append(f"- operation: {change.get('operation', 'Unknown')}")
+        if change.get("ai_explanation"):
+            lines.append(f"- model's explanation: {change['ai_explanation']}")
+        lines.append("")
+        lines.append("**Old:**")
+        lines.append("```html")
+        lines.append(str(change.get("old_html", ""))[:2000])
+        lines.append("```")
+        lines.append("**New:**")
+        lines.append("```html")
+        lines.append(str(change.get("new_html", ""))[:4000])
+        lines.append("```")
+        lines.append("")
+    (OUT / "pending_changes.md").write_text("\n".join(lines), encoding="utf-8")
+    return len(pending)
+
+
+def checklist_rows(checklist) -> list[dict]:
+    return [
+        {
+            "request_id": row.request_id,
+            "title": row.title,
+            "coverage": row.coverage.value,
+            "reason": row.reason,
+            "matches": [
+                {"file": m.file, "heading": m.heading, "score": m.score}
+                for m in row.matches
+            ],
+        }
+        for row in checklist
+    ]
+
+
+def note_monthly_remaining(client: SuperDocsClient, notes: list[str]) -> None:
+    # the server's own counter, unlike our per-command floor, is the truth
+    if client.budget.monthly_remaining is not None:
+        notes.append(
+            f"SuperDocs reports {client.budget.monthly_remaining} operation(s) "
+            f"left on the monthly plan"
+        )
+
+
+def saved_checklist(state: dict, requests: list) -> list[ChecklistRow]:
+    rows = state.get("checklist")
+    if rows is None:
+        raise ValueError(
+            "this run's state carries no coverage checklist — it was written "
+            "by an older version of the tool; delete output/run_state.json "
+            "and draft again (a fresh draft bills again)"
+        )
+    titles = {request.id: request.title for request in requests}
+    return [
+        ChecklistRow(
+            request_id=row["id"],
+            title=titles.get(row["id"], ""),
+            coverage=Coverage(row["coverage"]),
+            reason=row["reason"],
+        )
+        for row in rows
+    ]
+
+
+def check_core() -> dict:
+    client = make_client()
+    payload = client.verify_key()
+    return {"key_valid": True, "sessions": len(payload.get("sessions", []))}
+
+
+def preview_core(case_dir: Path) -> dict:
+    requests, petition, config, matches = load_case(case_dir)
+    checklist = build_checklist(requests, matches, config)
+    OUT.mkdir(exist_ok=True)
+    lines = ["# Coverage checklist (offline preview — locator only)", ""]
+    lines.append(f"Notice requests found: {len(requests)}")
+    lines.append("")
+    for row in checklist:
+        lines.append(f"## {row.request_id} — {row.title}")
+        lines.append(f"**{COVERAGE_LABEL[row.coverage]}**")
+        lines.append(row.reason)
+        for m in row.matches:
+            lines.append(f"- {m.file} / '{m.heading}' (score {m.score})")
+        lines.append("")
+    checklist_file = OUT / "checklist.md"
+    checklist_file.write_text("\n".join(lines), encoding="utf-8")
+    return {
+        "requests": len(requests),
+        "checklist": checklist_rows(checklist),
+        "checklist_file": str(checklist_file),
+    }
+
+
+def judge_core(case_dir: Path) -> dict:
+    requests, petition, config, matches = load_case(case_dir)
+    client = make_client()
+    lexical = build_checklist(requests, matches, config)
+    reply = client.ask(
+        f"rfe-judge-{case_dir.resolve().name}",
+        build_judge_instruction(requests, matches),
+        MODEL_TIER,
+    )
+    judged = judged_checklist(requests, matches, parse_judge_reply(reply, requests))
+    return {
+        "case": case_dir.name,
+        "ops_spent": client.budget.spent,
+        "rows": [
+            {
+                "request_id": judged_row.request_id,
+                "locator": lex_row.coverage.value,
+                "judge": judged_row.coverage.value,
+                "reason": judged_row.reason,
+            }
+            for lex_row, judged_row in zip(lexical, judged)
+        ],
+    }
+
+
+def draft_core(case_dir: Path) -> dict:
+    OUT.mkdir(exist_ok=True)
+    notes: list[str] = []
+    client = make_client()
+    session_id = f"rfe-run-{case_dir.resolve().name}"
+
+    if STATE_FILE.exists():
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        pending_case = Path(state.get("case_dir", case_dir))
+        if pending_case.resolve() != case_dir.resolve():
+            # resuming here would silently draft the other case's job and
+            # report it under this case's name
+            raise ValueError(
+                f"a run for '{pending_case.name}' is still pending "
+                f"(job {state['job_id']}) — decide its pending changes first "
+                f"(approve or reject), then draft '{case_dir.name}' fresh"
+            )
+        notes.append(f"resuming existing job {state['job_id']} — not paying again")
+    else:
+        requests, petition, config, matches = load_case(case_dir)
+        checklist = judged_or_lexical_checklist(
+            client, requests, matches, config, f"{session_id}-judge", notes
+        )
+        skeleton = build_skeleton(requests, checklist)
+        (OUT / "skeleton.md").write_text(skeleton, encoding="utf-8")
+
+        client.upload_document("draft-rfe-response.md", skeleton, session_id)
+        notes.append(f"uploaded skeleton to session {session_id}")
+
+        # the original petition documents ride along as attachments, so the
+        # drafting model can search the full sources, not only our excerpts
+        petition_dir = case_dir / "petition"
+        attached = 0
+        for source in sorted(petition_dir.iterdir()):
+            if source.is_file() and not source.name.startswith("."):
+                client.upload_attachment(source.name, source.read_bytes(), session_id)
+                attached += 1
+        notes.append(f"attached {attached} petition document(s)")
+        wait_for_attachments(client, session_id, notes)
+
+        answer = client.send_edit_instruction(
+            session_id, build_draft_instruction(), MODEL_TIER
+        )
+        job_id = answer.get("job_id")
+        if not job_id:
+            raise ValueError(
+                f"chat/async answered without a job_id — fields: {sorted(answer.keys())}"
+            )
+        state = {
+            "session_id": session_id,
+            "job_id": job_id,
+            "case_dir": str(case_dir),
+            # the buckets the document was actually built from; decide time
+            # must verify against these, not against a second, judge-less
+            # rebuild that would disagree with the skeleton
+            "checklist": [
+                {
+                    "id": row.request_id,
+                    "coverage": row.coverage.value,
+                    "reason": row.reason,
+                }
+                for row in checklist
+            ],
+        }
+        STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        notes.append(f"draft requested — job {job_id}")
+
+    job = client.wait_for_decision_or_end(state["job_id"], MAX_JOB_WAIT_SECONDS)
+    status = job.get("status")
+    note_monthly_remaining(client, notes)
+    result = {
+        "status": status,
+        "job_id": state["job_id"],
+        "ops_spent": client.budget.spent,
+        "notes": notes,
+    }
+    if status == "awaiting_approval":
+        count = dump_pending_changes(job)
+        result["pending_changes"] = count
+        result["pending_changes_file"] = str(OUT / "pending_changes.md")
+        result["next_step"] = (
+            "review the proposed changes, then decide (approve/reject); "
+            "nothing is applied until they are approved"
+        )
+    elif status in DEAD_JOB_STATUSES:
+        details = OUT / "failed_job.json"
+        details.write_text(json.dumps(job, indent=2), encoding="utf-8")
+        result["details_file"] = str(details)
+        notes.append(clear_dead_run("draft", state["job_id"], status, details))
+    return result
+
+
+def clear_dead_run(step: str, job_id: str, status: str, details_file: Path) -> str:
+    """Delete the state a dead job left behind and say what that costs.
+
+    Only a status the server itself calls dead gets here: a poll timeout or
+    a network error leaves the state alone, because that job may still be
+    running and clearing it would make the next draft pay twice.
+    """
+    STATE_FILE.unlink(missing_ok=True)
+    return (
+        f"{step} job {job_id} {status} on the server — details in "
+        f"{details_file}; run state cleared, the next draft starts fresh "
+        f"(and will bill again)"
+    )
+
+
+def decide_core(decisions: list[dict] | None = None, approve_all: bool | None = None) -> dict:
+    if not STATE_FILE.exists():
+        raise ValueError(
+            "no run state found — run a draft first; there is nothing to decide"
+        )
+    state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    reviewed = json.loads((OUT / "pending_changes.json").read_text(encoding="utf-8"))
+    if not reviewed:
+        raise ValueError("no reviewed pending changes — nothing to decide")
+
+    if decisions is None:
+        if approve_all is None:
+            raise ValueError(
+                "pass either approve_all or a per-change decisions list — "
+                "a decision must be explicit, never implied"
+            )
+        decisions = [
+            {"change_id": change["change_id"], "approved": approve_all}
+            for change in reviewed
+        ]
+
+    client = make_client()
+    client.decide_changes(state["session_id"], state["job_id"], decisions)
+    notes = [f"decided {len(decisions)} reviewed change(s)"]
+
+    job = client.wait_for_decision_or_end(state["job_id"], MAX_JOB_WAIT_SECONDS)
+    status = job.get("status")
+    note_monthly_remaining(client, notes)
+    result = {"status": status, "notes": notes, "ops_spent": client.budget.spent}
+
+    if status == "awaiting_approval":
+        count = dump_pending_changes(job)
+        result["pending_changes"] = count
+        result["pending_changes_file"] = str(OUT / "pending_changes.md")
+        result["next_step"] = (
+            "the model proposed NEW change(s); they are unreviewed — review "
+            "and decide again"
+        )
+        return result
+    if status in DEAD_JOB_STATUSES:
+        details = OUT / "job_final.json"
+        details.write_text(json.dumps(job, indent=2), encoding="utf-8")
+        result["details_file"] = str(details)
+        notes.append(clear_dead_run("decide", state["job_id"], status, details))
+        return result
+
+    markdown = client.export_document(state["session_id"], "markdown")
+    (OUT / "final-response.md").write_bytes(markdown)
+    docx = client.export_document(state["session_id"], "docx")
+    (OUT / "final-response.docx").write_bytes(docx)
+    notes.append("exported final-response.md and final-response.docx (free)")
+
+    case_dir = Path(state.get("case_dir", ROOT / "data"))
+    requests, petition, _, matches = load_case(case_dir)
+    checklist = saved_checklist(state, requests)
+    export_text = markdown.decode("utf-8", errors="replace")
+    failures = verify_export(export_text, requests, checklist)
+    # the skeleton placed every citation from a real excerpt; an edit round
+    # can still corrupt, invent, or DELETE one, so the export is checked
+    # against the petition itself before anything is called filed-ready.
+    # retrieval is deterministic code, so recomputed matches equal the
+    # draft-time counts the skeleton was built from
+    cited = cited_sections_from_export(export_text)
+    failures += find_citation_failures(cited, petition)
+    failures += missing_citation_failures(cited, requests, matches)
+    result["exported"] = {
+        "markdown": str(OUT / "final-response.md"),
+        "docx": str(OUT / "final-response.docx"),
+    }
+    result["verification_failures"] = failures
+    result["filed_ready"] = not failures
+    STATE_FILE.unlink()
+    notes.append("run finished and state cleared")
+    return result
+
+
+def command_check() -> None:
+    result = check_core()
+    print(f"key valid; sessions on the account: {result['sessions']}")
+
+
+def command_preview(case_dir: Path) -> None:
+    result = preview_core(case_dir)
+    print(f"wrote {result['checklist_file']}")
+    for row in result["checklist"]:
+        print(f"  {row['request_id']}: {row['coverage']}")
+
+
+def command_judge(case_dir: Path) -> None:
+    result = judge_core(case_dir)
+    print(f"case: {result['case']} | ops spent: {result['ops_spent']}")
+    print(f"{'':4}{'locator':<14}{'judge':<14}reason")
+    for row in result["rows"]:
+        print(
+            f"{row['request_id']:<4}{row['locator']:<14}"
+            f"{row['judge']:<14}{row['reason'][:90]}"
+        )
+
+
+def command_draft(case_dir: Path) -> None:
+    result = draft_core(case_dir)
+    for note in result["notes"]:
+        print(note)
+    print(f"job status: {result['status']} | ops spent this run: {result['ops_spent']}")
+    if result["status"] == "awaiting_approval":
+        print(
+            f"{result['pending_changes']} proposed change(s) written to "
+            f"{result['pending_changes_file']} — review them, then run: "
+            f"python rfe.py decide approve"
+        )
+    elif "details_file" in result:
+        print(f"details in {result['details_file']}")
+
+
+def command_decide(approve: bool) -> None:
+    result = decide_core(approve_all=approve)
+    for note in result["notes"]:
+        print(note)
+    print(f"job status: {result['status']}")
+    if result["status"] == "awaiting_approval":
+        print(
+            f"{result['pending_changes']} NEW change(s) pending — "
+            f"read {result['pending_changes_file']} and decide again"
+        )
+    elif result["status"] == "completed":
+        if result["verification_failures"]:
+            print("VERIFICATION FAILED:")
+            for failure in result["verification_failures"]:
+                print(f"  - {failure}")
+            print("do not treat this export as filed-ready")
+        else:
+            print(
+                "verification passed: all sections drafted, officer quotes "
+                "untouched, gap language intact, petition citations verbatim"
+            )
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if not args:
+        raise SystemExit(__doc__)
+    command, rest = args[0], args[1:]
+    default_case = ROOT / "data"
+    try:
+        if command == "check":
+            command_check()
+        elif command == "preview":
+            command_preview(Path(rest[0]) if rest else default_case)
+        elif command == "judge":
+            command_judge(Path(rest[0]) if rest else default_case)
+        elif command == "draft":
+            command_draft(Path(rest[0]) if rest else default_case)
+        elif command == "decide":
+            if len(rest) != 1 or rest[0] not in ("approve", "reject"):
+                raise SystemExit("usage: python rfe.py decide approve|reject")
+            command_decide(rest[0] == "approve")
+        else:
+            raise SystemExit(f"unknown command '{command}'\n\n{__doc__}")
+    except (SuperDocsError, ValueError) as e:
+        raise SystemExit(str(e)) from e
+
+
+if __name__ == "__main__":
+    main()
