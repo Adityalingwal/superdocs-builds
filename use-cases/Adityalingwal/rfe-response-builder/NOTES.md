@@ -78,7 +78,10 @@ README says what the tool does; this file says why it is the way it is.
   O-1A, L-1A, I-130 spousal, EB-2 NIW, O-1B arts, E-2 investor, H-1B
   change-of-employer, R-1 religious worker), 7 notice layout styles, 3
   formats (.md/.pdf/.docx), 62 officer requests total, each case shipped
-  with its author's answer key.
+  with its author's answer key. The markdown cases are what ship here; the
+  .pdf and .docx copies each case was also run against are regenerated
+  with `python tests/blind/write_pdf_copies.py <case_dir>` rather than
+  committed, since no automated test reads them.
   - Dangerous misses (claiming "answered" where evidence was missing):
     **1 / 62** — the judge over-scored one R-1 request (duty-hour gaps);
     the human gate caught it in review and the drafted document was
