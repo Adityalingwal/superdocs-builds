@@ -29,6 +29,7 @@ implementation.
 import json
 import sys
 import time
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -45,8 +46,15 @@ from engine.judge_coverage import (
     judged_checklist,
     parse_judge_reply,
 )
-from engine.load_corpus import petition_sections, read_notice, read_petition
+from engine.load_corpus import (
+    notice_file,
+    petition_sections,
+    read_petition,
+    supported_files,
+    unsupported_files,
+)
 from engine.model import ChecklistRow, Coverage
+from engine.read_document import read_document
 from engine.requests_from_notice import parse_notice
 from engine.response_skeleton import build_skeleton
 from engine.retrieve_petition_material import load_retrieval_config, retrieve
@@ -66,6 +74,9 @@ MAX_JOB_WAIT_SECONDS = 420
 ATTACHMENT_WAIT_SECONDS = 90
 OUT = ROOT / "output"
 STATE_FILE = OUT / "run_state.json"
+REVIEW_OLD_TEXT_CHARS = 2000
+REVIEW_NEW_TEXT_CHARS = 4000
+CUT_SHORT_MARKER = "[cut short here — read the full text in pending_changes.json]"
 
 COVERAGE_LABEL = {
     Coverage.ANSWERED: "Answered — petition material found",
@@ -75,11 +86,24 @@ COVERAGE_LABEL = {
 
 
 def load_case(case_dir: Path):
-    requests = parse_notice(read_notice(case_dir / "notice"))
+    path = notice_file(case_dir / "notice")
+    requests = parse_notice(read_document(path), source_name=path.name)
     petition = read_petition(case_dir / "petition")
     config = load_retrieval_config(ROOT / "config" / "retrieval.json")
     matches = retrieve(requests, petition_sections(petition), config)
-    return requests, petition, config, matches
+    return requests, petition, config, matches, unsupported_files(case_dir / "petition")
+
+
+def skipped_files_note(skipped: list[str]) -> str:
+    """One line naming the petition files no reader here can open.
+
+    A format we cannot read is not a reason to refuse the whole case — but
+    the attorney has to know which documents the answer was built without.
+    """
+    return (
+        f"skipped, format not supported: {', '.join(skipped)} — save them as "
+        f".docx or .pdf and run again to include them"
+    )
 
 
 def make_client() -> SuperDocsClient:
@@ -120,6 +144,15 @@ def wait_for_attachments(client, session_id: str, notes, max_wait_seconds: int =
     notes.append("attachments still processing — continuing; the skeleton's excerpts carry the draft")
 
 
+def fenced_html(label: str, html: str, limit: int) -> list[str]:
+    # a reviewer who cannot see that the text stops early may approve a change
+    # on half of it; the full string is always in pending_changes.json
+    block = [f"**{label}:**", "```html", html[:limit], "```"]
+    if len(html) > limit:
+        block.append(CUT_SHORT_MARKER)
+    return block
+
+
 def dump_pending_changes(job: dict) -> int:
     pending = (job.get("metadata") or {}).get("pending_changes") or []
     (OUT / "pending_changes.json").write_text(
@@ -132,14 +165,12 @@ def dump_pending_changes(job: dict) -> int:
         if change.get("ai_explanation"):
             lines.append(f"- model's explanation: {change['ai_explanation']}")
         lines.append("")
-        lines.append("**Old:**")
-        lines.append("```html")
-        lines.append(str(change.get("old_html", ""))[:2000])
-        lines.append("```")
-        lines.append("**New:**")
-        lines.append("```html")
-        lines.append(str(change.get("new_html", ""))[:4000])
-        lines.append("```")
+        lines += fenced_html(
+            "Old", str(change.get("old_html", "")), REVIEW_OLD_TEXT_CHARS
+        )
+        lines += fenced_html(
+            "New", str(change.get("new_html", "")), REVIEW_NEW_TEXT_CHARS
+        )
         lines.append("")
     (OUT / "pending_changes.md").write_text("\n".join(lines), encoding="utf-8")
     return len(pending)
@@ -197,11 +228,14 @@ def check_core() -> dict:
 
 
 def preview_core(case_dir: Path) -> dict:
-    requests, petition, config, matches = load_case(case_dir)
+    requests, petition, config, matches, skipped = load_case(case_dir)
     checklist = build_checklist(requests, matches, config)
     OUT.mkdir(exist_ok=True)
     lines = ["# Coverage checklist (offline preview — locator only)", ""]
     lines.append(f"Notice requests found: {len(requests)}")
+    if skipped:
+        lines.append("")
+        lines.append(skipped_files_note(skipped))
     lines.append("")
     for row in checklist:
         lines.append(f"## {row.request_id} — {row.title}")
@@ -216,15 +250,16 @@ def preview_core(case_dir: Path) -> dict:
         "requests": len(requests),
         "checklist": checklist_rows(checklist),
         "checklist_file": str(checklist_file),
+        "skipped_files": skipped,
     }
 
 
 def judge_core(case_dir: Path) -> dict:
-    requests, petition, config, matches = load_case(case_dir)
+    requests, petition, config, matches, skipped = load_case(case_dir)
     client = make_client()
     lexical = build_checklist(requests, matches, config)
     reply = client.ask(
-        f"rfe-judge-{case_dir.resolve().name}",
+        f"rfe-judge-{uuid.uuid4().hex[:12]}",
         build_judge_instruction(requests, matches),
         MODEL_TIER,
     )
@@ -232,6 +267,7 @@ def judge_core(case_dir: Path) -> dict:
     return {
         "case": case_dir.name,
         "ops_spent": client.budget.spent,
+        "skipped_files": skipped,
         "rows": [
             {
                 "request_id": judged_row.request_id,
@@ -248,7 +284,6 @@ def draft_core(case_dir: Path) -> dict:
     OUT.mkdir(exist_ok=True)
     notes: list[str] = []
     client = make_client()
-    session_id = f"rfe-run-{case_dir.resolve().name}"
 
     if STATE_FILE.exists():
         state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
@@ -261,9 +296,20 @@ def draft_core(case_dir: Path) -> dict:
                 f"(job {state['job_id']}) — decide its pending changes first "
                 f"(approve or reject), then draft '{case_dir.name}' fresh"
             )
+        # a resumed run never reaches load_case, but the attorney still has to
+        # be told which petition documents the draft was built without
+        skipped = unsupported_files(case_dir / "petition")
+        if skipped:
+            notes.append(skipped_files_note(skipped))
         notes.append(f"resuming existing job {state['job_id']} — not paying again")
     else:
-        requests, petition, config, matches = load_case(case_dir)
+        # a case folder's name can carry spaces and punctuation that do not
+        # belong in a URL path; the id the run is resumed by lives in
+        # run_state.json, so it never has to be reconstructed from the name
+        session_id = f"rfe-run-{uuid.uuid4().hex[:12]}"
+        requests, petition, config, matches, skipped = load_case(case_dir)
+        if skipped:
+            notes.append(skipped_files_note(skipped))
         checklist = judged_or_lexical_checklist(
             client, requests, matches, config, f"{session_id}-judge", notes
         )
@@ -274,14 +320,12 @@ def draft_core(case_dir: Path) -> dict:
         notes.append(f"uploaded skeleton to session {session_id}")
 
         # the original petition documents ride along as attachments, so the
-        # drafting model can search the full sources, not only our excerpts
-        petition_dir = case_dir / "petition"
-        attached = 0
-        for source in sorted(petition_dir.iterdir()):
-            if source.is_file() and not source.name.startswith("."):
-                client.upload_attachment(source.name, source.read_bytes(), session_id)
-                attached += 1
-        notes.append(f"attached {attached} petition document(s)")
+        # drafting model can search the full sources, not only our excerpts —
+        # exactly the files the engine read, never one it had to skip
+        attachments = supported_files(case_dir / "petition")
+        for source in attachments:
+            client.upload_attachment(source.name, source.read_bytes(), session_id)
+        notes.append(f"attached {len(attachments)} petition document(s)")
         wait_for_attachments(client, session_id, notes)
 
         answer = client.send_edit_instruction(
@@ -318,6 +362,7 @@ def draft_core(case_dir: Path) -> dict:
         "status": status,
         "job_id": state["job_id"],
         "ops_spent": client.budget.spent,
+        "skipped_files": skipped,
         "notes": notes,
     }
     if status == "awaiting_approval":
@@ -404,15 +449,15 @@ def decide_core(decisions: list[dict] | None = None, approve_all: bool | None = 
     notes.append("exported final-response.md and final-response.docx (free)")
 
     case_dir = Path(state.get("case_dir", ROOT / "data"))
-    requests, petition, _, matches = load_case(case_dir)
+    requests, petition, _, matches, skipped = load_case(case_dir)
     checklist = saved_checklist(state, requests)
     export_text = markdown.decode("utf-8", errors="replace")
     failures = verify_export(export_text, requests, checklist)
     # the skeleton placed every citation from a real excerpt; an edit round
     # can still corrupt, invent, or DELETE one, so the export is checked
     # against the petition itself before anything is called filed-ready.
-    # retrieval is deterministic code, so recomputed matches equal the
-    # draft-time counts the skeleton was built from
+    # retrieval is deterministic code, so recomputed matches are the same
+    # petition sections the skeleton was built from
     cited = cited_sections_from_export(export_text)
     failures += find_citation_failures(cited, petition)
     failures += missing_citation_failures(cited, requests, matches)
@@ -422,6 +467,7 @@ def decide_core(decisions: list[dict] | None = None, approve_all: bool | None = 
     }
     result["verification_failures"] = failures
     result["filed_ready"] = not failures
+    result["skipped_files"] = skipped
     STATE_FILE.unlink()
     notes.append("run finished and state cleared")
     return result
@@ -432,8 +478,14 @@ def command_check() -> None:
     print(f"key valid; sessions on the account: {result['sessions']}")
 
 
+def print_skipped_files(result: dict) -> None:
+    if result["skipped_files"]:
+        print(skipped_files_note(result["skipped_files"]))
+
+
 def command_preview(case_dir: Path) -> None:
     result = preview_core(case_dir)
+    print_skipped_files(result)
     print(f"wrote {result['checklist_file']}")
     for row in result["checklist"]:
         print(f"  {row['request_id']}: {row['coverage']}")
@@ -441,6 +493,7 @@ def command_preview(case_dir: Path) -> None:
 
 def command_judge(case_dir: Path) -> None:
     result = judge_core(case_dir)
+    print_skipped_files(result)
     print(f"case: {result['case']} | ops spent: {result['ops_spent']}")
     print(f"{'':4}{'locator':<14}{'judge':<14}reason")
     for row in result["rows"]:

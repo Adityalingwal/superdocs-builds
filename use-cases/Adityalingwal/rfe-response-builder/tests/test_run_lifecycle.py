@@ -5,6 +5,7 @@ injected transport and `export_document` (which talks to urllib directly)
 is replaced per test with the exact markdown that test wants verified.
 """
 import json
+import shutil
 
 import pytest
 
@@ -55,7 +56,7 @@ def install(monkeypatch, tmp_path, transport, max_ops=5):
 
 
 def lexical_case():
-    requests, _, config, matches = rfe.load_case(CASE)
+    requests, _, config, matches, _skipped = rfe.load_case(CASE)
     return requests, build_checklist(requests, matches, config)
 
 
@@ -291,6 +292,138 @@ def test_draft_saves_the_judged_checklist_into_the_run_state(monkeypatch, tmp_pa
     state = json.loads((tmp_path / "run_state.json").read_text(encoding="utf-8"))
     saved = {row["id"]: row["coverage"] for row in state["checklist"]}
     assert saved == buckets
+
+
+def review_file_for(monkeypatch, tmp_path, change: dict) -> str:
+    monkeypatch.setattr(rfe, "OUT", tmp_path)
+    rfe.dump_pending_changes({"metadata": {"pending_changes": [change]}})
+    return (tmp_path / "pending_changes.md").read_text(encoding="utf-8")
+
+
+def test_a_change_too_long_for_the_review_file_says_where_it_was_cut(
+    monkeypatch, tmp_path
+):
+    review = review_file_for(
+        monkeypatch, tmp_path, {"change_id": "c1", "new_html": "<p>x</p>" * 600}
+    )
+
+    assert rfe.CUT_SHORT_MARKER in review
+
+
+def test_a_change_that_fits_the_review_file_carries_no_cut_marker(
+    monkeypatch, tmp_path
+):
+    review = review_file_for(
+        monkeypatch,
+        tmp_path,
+        {"change_id": "c1", "old_html": "<p>o</p>" * 30, "new_html": "<p>n</p>" * 30},
+    )
+
+    assert rfe.CUT_SHORT_MARKER not in review
+
+
+def session_ids_seen(calls) -> list[str]:
+    seen = []
+    for call in calls:
+        if call["path"].startswith("/attachments/status/"):
+            seen.append(call["path"].rsplit("/", 1)[1])
+        body = call["body"] or {}
+        if "session_id" in body:
+            seen.append(body["session_id"])
+    return seen
+
+
+def test_a_case_folder_named_with_a_space_still_gets_url_safe_session_ids(
+    monkeypatch, tmp_path
+):
+    case = tmp_path / "Client Smith"
+    shutil.copytree(CASE, case)
+    calls = []
+    install(
+        monkeypatch, tmp_path, fake_transport(calls, reply=judge_reply(ALL_ANSWERED))
+    )
+
+    rfe.draft_core(case)
+
+    seen = session_ids_seen(calls)
+    assert seen
+    for session_id in seen:
+        assert " " not in session_id
+        assert "Client" not in session_id
+
+
+def test_two_fresh_drafts_of_one_case_do_not_reuse_the_same_session_id(
+    monkeypatch, tmp_path
+):
+    first, second = [], []
+    install(
+        monkeypatch, tmp_path, fake_transport(first, reply=judge_reply(ALL_ANSWERED))
+    )
+    rfe.draft_core(CASE)
+    (tmp_path / "run_state.json").unlink()
+    install(
+        monkeypatch, tmp_path, fake_transport(second, reply=judge_reply(ALL_ANSWERED))
+    )
+    rfe.draft_core(CASE)
+
+    assert session_ids_seen(first)[0] != session_ids_seen(second)[0]
+
+
+def case_with_a_legacy_doc(tmp_path):
+    case = tmp_path / "case-with-a-legacy-doc"
+    shutil.copytree(CASE, case)
+    (case / "petition" / "02-support-letter.doc").write_bytes(b"legacy word bytes")
+    return case
+
+
+def test_a_petition_file_in_an_unsupported_format_is_skipped_and_named(
+    monkeypatch, tmp_path
+):
+    case = case_with_a_legacy_doc(tmp_path)
+    calls = []
+    install(
+        monkeypatch, tmp_path, fake_transport(calls, reply=judge_reply(ALL_ANSWERED))
+    )
+
+    result = rfe.draft_core(case)
+
+    assert result["status"] == "awaiting_approval"
+    assert result["skipped_files"] == ["02-support-letter.doc"]
+    assert any(
+        "02-support-letter.doc" in note and "format not supported" in note
+        for note in result["notes"]
+    )
+    uploaded = [
+        call["body"]["filename"]
+        for call in calls
+        if call["path"] == "/attachments/upload-base64"
+    ]
+    assert uploaded
+    assert "02-support-letter.doc" not in uploaded
+
+
+def test_the_preview_checklist_names_the_petition_files_it_could_not_read(
+    monkeypatch, tmp_path
+):
+    case = case_with_a_legacy_doc(tmp_path)
+    monkeypatch.setattr(rfe, "OUT", tmp_path)
+
+    result = rfe.preview_core(case)
+
+    assert result["skipped_files"] == ["02-support-letter.doc"]
+    checklist = (tmp_path / "checklist.md").read_text(encoding="utf-8")
+    assert "skipped, format not supported: 02-support-letter.doc" in checklist
+
+
+def test_a_preview_with_nothing_skipped_says_nothing_about_skipped_files(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(rfe, "OUT", tmp_path)
+
+    result = rfe.preview_core(CASE)
+
+    assert result["skipped_files"] == []
+    assert "skipped" not in (tmp_path / "checklist.md").read_text(encoding="utf-8")
 
 
 def test_a_deleted_citation_refuses_the_export_naming_the_request(
