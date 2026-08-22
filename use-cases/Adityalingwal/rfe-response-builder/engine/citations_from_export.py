@@ -2,11 +2,11 @@
 
 The skeleton places every "Petition material relied on" quote in code, so
 the export is the only place to check whether an edit round changed one.
-This module recovers each quote and the file it names; comparing them
-against the real sources is `verify_citations`' job, and counting them
-against the checklist's matches is `missing_citation_failures`' job — an
-edit that deletes or mangles a citation must fail the count, not slip out
-of the comparison.
+This module recovers each quote with the file and section it names;
+comparing the quotes against the real sources is `verify_citations`' job,
+and checking that every source the checklist placed is still cited is
+`missing_citation_failures`' job — an edit that deletes or mangles a
+citation must be named, not slip out of the comparison.
 """
 import re
 
@@ -53,8 +53,8 @@ def _quote_below(lines: list[str], start: int) -> str:
 
 def cited_sections_from_export(export_text: str) -> list[dict]:
     """Pull every cited quote out of the export as
-    [{"section", "file", "quote"}, ...] — the shape find_citation_failures
-    reads."""
+    [{"section", "file", "heading", "quote"}, ...] — the shape
+    find_citation_failures and missing_citation_failures read."""
     lines = export_text.splitlines()
     cited = []
     section = ""
@@ -69,7 +69,12 @@ def cited_sections_from_export(export_text: str) -> list[dict]:
         quote = _quote_below(lines, i + 1)
         if quote:
             cited.append(
-                {"section": section, "file": citation.group(1), "quote": quote}
+                {
+                    "section": section,
+                    "file": citation.group(1),
+                    "heading": citation.group(2),
+                    "quote": quote,
+                }
             )
     return cited
 
@@ -82,24 +87,25 @@ def missing_citation_failures(
     requests: list[Request],
     matches: dict[str, list[Match]],
 ) -> list[str]:
-    """Compare each section's recovered citations against how many the
-    skeleton placed there. A deleted or unparsable citation never reaches
-    `find_citation_failures`, so the count is the only thing that can
-    still catch it."""
-    found: dict[str, int] = {}
+    """Name every petition source the skeleton cited that the export no
+    longer cites. A deleted or unparsable citation never reaches
+    `find_citation_failures`, and matching by (file, section) rather than
+    by count also catches one citation replaced by a copy of another."""
+    found: dict[str, set[tuple[str, str]]] = {}
     for cited in cited_sections:
         numbered = SECTION_NUMBER.match(cited["section"].strip())
         if numbered:
             request_id = f"R{numbered.group(1)}"
-            found[request_id] = found.get(request_id, 0) + 1
+            found.setdefault(request_id, set()).add(
+                (cited["file"], cited["heading"])
+            )
     failures = []
     for request in requests:
-        expected = len(matches.get(request.id, []))
-        cited_count = found.get(request.id, 0)
-        if cited_count < expected:
+        expected = {(m.file, m.heading) for m in matches.get(request.id, [])}
+        for file, heading in sorted(expected - found.get(request.id, set())):
             failures.append(
-                f"{request.id}'s section cites {cited_count} petition "
-                f"source(s) but its checklist row has {expected} — a "
-                f"citation was removed or corrupted during editing"
+                f"{request.id}'s section lost its citation to {file}, section "
+                f"\"{heading}\" — a citation was removed or replaced during "
+                f"editing"
             )
     return failures

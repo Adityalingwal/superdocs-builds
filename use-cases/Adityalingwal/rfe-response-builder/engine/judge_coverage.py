@@ -11,8 +11,6 @@ import re
 
 from engine.model import ChecklistRow, Coverage, Match, Request
 
-REQUEST_TEXT_LIMIT = 1200
-EXCERPT_LIMIT = 2400
 # the chat API refuses messages over 100k characters; stay well under
 MESSAGE_CHAR_LIMIT = 90_000
 # progressively less material per request until the instruction fits
@@ -52,7 +50,9 @@ def build_judge_instruction(
         lines = [JUDGE_RULES]
         for request in requests:
             lines.append(f"--- Request {request.id}: {request.title}")
-            lines.append(f"Officer's concern: {_flat(request.text, REQUEST_TEXT_LIMIT)}")
+            # the officer's concern goes in whole; only the material quoted
+            # under it shrinks when the instruction has to fit the message limit
+            lines.append(f"Officer's concern: {' '.join(request.text.split())}")
             found = matches.get(request.id, [])[:per_request]
             if found:
                 for match in found:

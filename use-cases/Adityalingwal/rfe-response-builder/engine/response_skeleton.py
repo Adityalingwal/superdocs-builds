@@ -27,6 +27,7 @@ COVERAGE_LABEL = {
 
 
 def _trimmed(text: str) -> str:
+    # petition excerpts only — the officer's request is never cut.
     # a blockquote marker at a line start is formatting; flattened
     # mid-sentence it would read as content the source never had, and the
     # citation check could then only pass it by ignoring ">" everywhere —
@@ -63,7 +64,13 @@ def build_skeleton(requests: list[Request], checklist: list[ChecklistRow]) -> st
         row = rows_by_id[request.id]
         lines.append(f"## Response to Request {request.id[1:]} — {request.title}")
         lines.append("")
-        lines.append(f"**Officer's request (quoted from the notice):** \"{_trimmed(request.text)}\"")
+        # the officer's own words go in whole: SuperDocs only ever sees the
+        # skeleton, so a cut here is a cut in what the model drafts against.
+        # They go in as a blockquote so a "## ..." line inside the notice
+        # text cannot start a new section of our document
+        lines.append("**Officer's request (quoted from the notice):**")
+        lines.append("")
+        lines.extend(f"> {line}" if line else ">" for line in request.text.splitlines())
         lines.append("")
         if row.matches:
             lines.append("**Petition material relied on:**")

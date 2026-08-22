@@ -3,7 +3,7 @@ import re
 import pytest
 
 from engine.coverage_checklist import build_checklist
-from engine.model import ChecklistRow, Coverage
+from engine.model import ChecklistRow, Coverage, Request
 from engine.requests_from_notice import parse_notice
 from engine.response_skeleton import build_skeleton
 from engine.retrieve_petition_material import retrieve
@@ -134,6 +134,65 @@ def test_an_all_answered_export_passes_verification(corpus):
     assert verify_export(export, requests, answered) == []
 
 
+LONG_REQUEST_TEXT = " ".join(
+    f"Sentence {i} of the officer's concern about the beneficiary's evidence."
+    for i in range(1, 23)
+)
+
+
+def answered_row(request: Request) -> ChecklistRow:
+    return ChecklistRow(
+        request_id=request.id,
+        title=request.title,
+        coverage=Coverage.ANSWERED,
+        reason="petition material found",
+    )
+
+
+def test_a_long_officer_request_is_quoted_and_verified_in_full_not_trimmed():
+    assert len(LONG_REQUEST_TEXT) > 1500
+    request = Request(id="R1", title="Long request", text=LONG_REQUEST_TEXT)
+    checklist = [answered_row(request)]
+    export = drafted(build_skeleton([request], checklist))
+
+    assert LONG_REQUEST_TEXT in export
+    assert verify_export(export, [request], checklist) == []
+
+
+def test_a_word_changed_beyond_the_old_trim_point_is_still_caught():
+    request = Request(id="R1", title="Long request", text=LONG_REQUEST_TEXT)
+    checklist = [answered_row(request)]
+    export = drafted(build_skeleton([request], checklist)).replace(
+        "Sentence 20 of the officer's", "Sentence 20 of the attorney's"
+    )
+
+    failures = verify_export(export, [request], checklist)
+
+    assert any("officer quote was altered" in failure for failure in failures)
+
+
+def numbered_corpus(count: int):
+    requests = [
+        Request(id=f"R{i}", title=f"Topic {i}", text=f"Provide evidence item {i}.")
+        for i in range(1, count + 1)
+    ]
+    return requests, [answered_row(request) for request in requests]
+
+
+def test_a_missing_section_1_is_named_even_though_section_10_starts_the_same_way():
+    requests, checklist = numbered_corpus(11)
+    lines = drafted(build_skeleton(requests, checklist)).splitlines()
+    start = next(
+        i for i, line in enumerate(lines) if line.startswith("## Response to Request 1 —")
+    )
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("## "))
+    del lines[start:end]
+
+    failures = verify_export("\n".join(lines), requests, checklist)
+
+    assert any("R1's response section is missing" in failure for failure in failures)
+
+
 def test_a_gap_case_that_lost_the_phrase_from_its_own_section_still_fails(corpus):
     requests, checklist = corpus
     export = drafted(build_skeleton(requests, checklist)).replace(
@@ -143,3 +202,38 @@ def test_a_gap_case_that_lost_the_phrase_from_its_own_section_still_fails(corpus
     failures = verify_export(export, requests, checklist)
 
     assert any("R5" in f and "evidence-gap" in f for f in failures)
+
+
+def test_a_heading_line_inside_the_officer_request_does_not_split_its_section():
+    # a markdown notice can carry "## ..." lines inside one request; quoted as
+    # live markdown they would start a new section in the export
+    text = (
+        "Submit proof of the degree.\n"
+        "## Supporting documents\n"
+        "Include transcripts and the evaluation."
+    )
+    requests = [
+        Request(id="R1", title="Degree", text=text),
+        Request(id="R2", title="Wage", text="Submit the certified wage record."),
+    ]
+    checklist = [answered_row(r) for r in requests]
+    export = drafted(build_skeleton(requests, checklist))
+
+    slices = response_slices(export)
+    assert set(slices) == {"R1", "R2"}
+    assert "requested material" in slices["R1"]
+    assert verify_export(export, requests, checklist) == []
+
+
+def test_an_altered_quote_is_caught_in_its_own_section_even_when_another_section_repeats_it():
+    same = "Submit the certified degree evaluation."
+    requests = [
+        Request(id="R1", title="First", text=same),
+        Request(id="R2", title="Second", text=same),
+    ]
+    checklist = [answered_row(r) for r in requests]
+    export = drafted(build_skeleton(requests, checklist))
+    export = export.replace(same, "Submit a certified degree evaluation.", 1)
+
+    failures = verify_export(export, requests, checklist)
+    assert any(f.startswith("R1") and "officer quote was altered" in f for f in failures)

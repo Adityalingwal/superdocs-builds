@@ -7,7 +7,7 @@ section, and the honest evidence-gap language was not drafted away.
 import re
 
 from engine.model import ChecklistRow, Coverage, Request
-from engine.response_skeleton import DRAFT_PLACEHOLDER_PREFIX, _trimmed
+from engine.response_skeleton import DRAFT_PLACEHOLDER_PREFIX
 from engine.verify_citations import _normalize
 
 RESPONSE_HEADING = re.compile(r"^#{1,6}\s+Response to Request\s+(\d+)\b")
@@ -62,21 +62,21 @@ def verify_export(
             "never written; do not file this document"
         )
 
+    slices = response_slices(export_text)
+
     for request in requests:
-        title = f"response to request {request.id[1:]}"
-        if title not in normalized:
+        if request.id not in slices:
             failures.append(
                 f"{request.id}'s response section is missing from the export — "
                 f"every request in the notice must keep its section"
             )
-        quote = _normalize(_trimmed(request.text))
-        if quote not in normalized:
+        quote = _normalize(request.text)
+        if quote not in _normalize(slices.get(request.id, "")):
             failures.append(
                 f"{request.id}'s officer quote was altered by editing — the "
                 f"notice text is read-only input and must survive verbatim"
             )
 
-    slices = response_slices(export_text)
     rows_by_id = {row.request_id: row for row in checklist}
     for request in requests:
         needed = GAP_PHRASES.get(rows_by_id[request.id].coverage)

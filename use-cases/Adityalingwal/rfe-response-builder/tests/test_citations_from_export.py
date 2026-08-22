@@ -11,9 +11,11 @@ def a_request(request_id: str, title: str = "Specialty occupation") -> Request:
     return Request(id=request_id, title=title, text="Provide evidence.")
 
 
-def a_match(request_id: str, file: str = "01-petition.md") -> Match:
+def a_match(
+    request_id: str, file: str = "01-petition.md", heading: str = "Duties"
+) -> Match:
     return Match(
-        request_id=request_id, file=file, heading="Duties", excerpt="x", score=1.0
+        request_id=request_id, file=file, heading=heading, excerpt="x", score=1.0
     )
 
 
@@ -53,13 +55,56 @@ def test_a_reworded_citation_line_is_reported_as_removed():
     assert any("R1" in failure and "removed" in failure for failure in failures)
 
 
-def test_fewer_citations_than_checklist_matches_is_reported_with_counts():
+TWO_CITATIONS = """## Response to Request 1 — Specialty occupation
+
+**Petition material relied on:**
+
+- From `01-petition.md`, section "Duties":
+  "the beneficiary designs distributed systems"
+- From `02-letter.md`, section "Wage":
+  "the offered wage is $145,000 a year"
+
+**Response:**
+
+Prose.
+"""
+
+TWO_MATCHES = [a_match("R1"), a_match("R1", file="02-letter.md", heading="Wage")]
+
+
+def test_a_citation_the_export_dropped_is_named_by_file_and_section():
     failures = missing_citation_failures(
-        cited_sections_from_export(SECTION),
-        [a_request("R1")],
-        {"R1": [a_match("R1"), a_match("R1", file="02-letter.md")]},
+        cited_sections_from_export(SECTION), [a_request("R1")], {"R1": TWO_MATCHES}
     )
-    assert any("1" in failure and "2" in failure for failure in failures)
+    assert failures == [
+        "R1's section lost its citation to 02-letter.md, section \"Wage\" — "
+        "a citation was removed or replaced during editing"
+    ]
+
+
+def test_a_citation_replaced_by_a_copy_of_another_is_caught_though_the_count_holds():
+    duplicated = TWO_CITATIONS.replace(
+        '- From `02-letter.md`, section "Wage":\n'
+        '  "the offered wage is $145,000 a year"',
+        '- From `01-petition.md`, section "Duties":\n'
+        '  "the beneficiary designs distributed systems"',
+    )
+    cited = cited_sections_from_export(duplicated)
+    assert len(cited) == 2
+
+    failures = missing_citation_failures(cited, [a_request("R1")], {"R1": TWO_MATCHES})
+
+    assert len(failures) == 1
+    assert '02-letter.md, section "Wage"' in failures[0]
+
+
+def test_an_untouched_two_citation_section_reports_nothing_missing():
+    failures = missing_citation_failures(
+        cited_sections_from_export(TWO_CITATIONS),
+        [a_request("R1")],
+        {"R1": TWO_MATCHES},
+    )
+    assert failures == []
 
 
 def test_request_numbers_do_not_match_by_prefix():
