@@ -22,7 +22,7 @@ software, not legal advice, and it never decides eligibility.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest tests/        # 96 tests, all offline
+.venv/bin/python -m pytest tests/        # 114 tests, all offline
 .venv/bin/python rfe.py preview          # parse + coverage checklist for the sample case
 ```
 
@@ -94,11 +94,11 @@ run may make. Once the cap is reached, the run refuses the next one.
 ## What it does
 
 - Parses the officer's notice into individual requests — across six
-  layout styles and `.md`/`.txt`/`.pdf`/`.docx`, refusing unsupported
-  inputs by name instead of guessing.
+  layout styles and `.md`/`.txt`/`.pdf`/`.docx`.
 - Locates petition material per request with deterministic, traceable
   word-overlap retrieval — every match can be traced to the words that
-  produced it.
+  produced it. Petition files in any other format are skipped, and the
+  run lists them by name so nothing drops silently.
 - Has the model judge coverage per request (answered / partially / not
   provided), then code verifies the judgement: an "answered" with no
   located material is overridden to "not provided".
@@ -107,7 +107,8 @@ run may make. Once the cap is reached, the run refuses the next one.
   prose into per-request placeholders.
 - Stops at a human gate: proposed changes are written out for review;
   approve, reject, or reject-with-feedback (which makes the model
-  re-propose) — over as many rounds as it takes.
+  re-propose; feedback through the MCP door) — over as many rounds as it
+  takes.
 - Verifies the export before calling it filed-ready: no surviving
   placeholders, officer quotes untouched, every request keeps its
   section, gap language present per unanswered request, every citation
@@ -125,11 +126,14 @@ run may make. Once the cap is reached, the run refuses the next one.
 | `POST /chat/{session}/approve` | the human decision | not flagged; a feedback round that redrafts may bill (see limitations) |
 | `POST /documents/export` | markdown + docx out | no |
 
+Both files are the same document exported by SuperDocs; the checks read
+the Markdown copy.
+
 ## Evidence
 
 | Claim | Proof |
 |---|---|
-| 96 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
+| 114 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
 | Blind-tested on 9 unseen fictional cases (7 visa types, 7 notice layouts, 62 requests, independent answer keys) | `tests/blind/` |
 | Dangerous misses ("answered" where evidence was missing): 1/62, caught by the human gate in review | blind protocol notes in `NOTES.md` |
 | 5 parser defects found blind were fixed with regression tests | `tests/test_parse_notice_formats.py` |
@@ -140,6 +144,10 @@ run may make. Once the cap is reached, the run refuses the next one.
 
 - No OCR — scanned, image-only PDFs are refused, not read. Legacy `.doc`
   is not supported (`.docx` is).
+- The last request ends at the first all-caps line (heading styles) or
+  the first blank paragraph (list styles), so trailing text of the last
+  request can be cut — check the last request's officer quote in the
+  checklist.
 - Very terse notices bias the locator toward "partially" — deliberately
   conservative: a false "partial" costs one extra look, a false
   "answered" gives false comfort before a legal deadline.

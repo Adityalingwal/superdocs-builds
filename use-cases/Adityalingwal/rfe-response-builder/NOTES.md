@@ -11,9 +11,11 @@ README says what the tool does; this file says why it is the way it is.
 - A list-style notice states each numbered request in one paragraph;
   heading-style notices may run several paragraphs per request. Six real layout
   styles are supported (see Verification below); an unrecognized layout is
-  refused with the supported list, never guessed at.
-- One SuperDocs session per case (`rfe-run-<case>`); re-running resumes
-  the same job rather than paying again.
+  refused with the file's name and the layouts that would work, never
+  guessed at.
+- The draft's SuperDocs session id is saved in `output/run_state.json`;
+  re-running resumes the same job rather than paying again. Coverage
+  judging uses its own short session.
 - The free tier's operations are protected by a hard cap
   (`MAX_OPS_PER_RUN`, default 5) counted from the server's own usage
   fields when present, and floored at 1 for a call we know bills when the
@@ -33,8 +35,8 @@ README says what the tool does; this file says why it is the way it is.
   (`[DRAFT RESPONSE FOR RN — TO BE WRITTEN]`). Citations start out
   code-placed from real excerpts — but an edit round can still alter or
   remove one, so the export is verified against the petition (verbatim
-  quotes, real filenames, and per-section citation counts) before
-  anything is called filed-ready.
+  quotes, real filenames, and every cited petition section still cited in
+  the request it belongs to) before anything is called filed-ready.
 - **Tri-state coverage** (Answered / Partially / Not provided) with a
   conservative bias: when uncertain, the system flags rather than
   reassures. A false "answered" gives an attorney false comfort before a
@@ -52,6 +54,9 @@ README says what the tool does; this file says why it is the way it is.
 
 - No OCR: scanned/image-only PDFs are refused, not read.
 - Legacy .doc (pre-2007 Word) is not supported; .docx is.
+- The last request ends at the first all-caps line (heading styles) or the
+  first blank paragraph (list styles), so trailing text of the last request
+  can be cut — check the last request's officer quote in the checklist.
 - Very terse notices (a request stated in a handful of words) bias the
   locator toward "partial" — deliberate, conservative direction.
 - The coverage judge sees excerpts capped to fit the chat message limit
@@ -72,7 +77,7 @@ README says what the tool does; this file says why it is the way it is.
 
 ## Verification evidence (all reproducible)
 
-- **96 automated tests, no API key needed** (`python -m pytest tests/`).
+- **114 automated tests, no API key needed** (`python -m pytest tests/`).
 - **Blind testing:** 9 fictional cases written by independent agents that
   were given no knowledge of the parser or scoring — 7 case types (H-1B,
   O-1A, L-1A, I-130 spousal, EB-2 NIW, O-1B arts, E-2 investor, H-1B
