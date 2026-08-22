@@ -35,6 +35,24 @@ CAPS_LINE = re.compile(r"^[A-Z][A-Z0-9 ,.'()\-—–:;/&]{4,}\s*$")
 TITLE_WORD_LIMIT = 8
 MIN_REQUESTS = 2  # one lone numbered line is a date or an address, not a request list
 
+# an attorney reads this, not a developer: it shows the layouts side by side
+# instead of describing them in a sentence
+UNRECOGNIZED_LAYOUT = """\
+Could not find the officer's requests in {source_name}.
+
+The tool looks for requests written in one of these ways:
+
+    numbered list:       1.  Evidence that ...
+    numbered headings:   ITEM 1 — Evidence that ...
+                         REQUEST 1 — Evidence that ...
+                         Request 1: Evidence that ...
+                         ## 1. Evidence that ...
+                         ### 1. Evidence that ...
+
+What to do: open the notice and check that each request starts
+with its number. If the notice uses bullets or another layout,
+save a copy with the requests numbered 1, 2, 3 and run again."""
+
 
 def _title_from(text: str) -> str:
     words = text.split()
@@ -63,9 +81,9 @@ def _parse_heading_style(notice_text: str) -> list[Request] | None:
 
 
 def _parse_heading_items(notice_text: str, pattern: re.Pattern) -> list[Request] | None:
-    # A request heading's body runs to the next request heading, or to the
-    # next heading of any kind — so a closing "How to respond" section can
-    # never be swallowed into the last request.
+    # A request heading's body runs to the next request heading. The last one
+    # has no such bound, so it stops at the next heading of any kind — that is
+    # the only place a closing "How to respond" section could be swallowed.
     anchors = list(pattern.finditer(notice_text))
     if len(anchors) < MIN_REQUESTS:
         return None
@@ -88,9 +106,10 @@ def _parse_heading_items(notice_text: str, pattern: re.Pattern) -> list[Request]
                 body_start = line_break + 1 + len(line)
             else:
                 break
-        next_heading = ANY_HEADING.search(notice_text, body_start, end)
-        if next_heading:
-            end = next_heading.start()
+        if i + 1 == len(anchors):
+            next_heading = ANY_HEADING.search(notice_text, body_start, end)
+            if next_heading:
+                end = next_heading.start()
         body = notice_text[body_start:end].strip()
         title = " ".join([m.group(2).strip(), *title_extra]).strip() or _title_from(body)
         requests.append(Request(id=f"R{m.group(1)}", title=title, text=body))
@@ -130,13 +149,13 @@ def _parse_item_style(notice_text: str, pattern: re.Pattern) -> list[Request] | 
     return requests
 
 
-def parse_notice(notice_text: str) -> list[Request]:
+def parse_notice(notice_text: str, source_name: str = "the notice") -> list[Request]:
     """Split the officer's notice into its individual numbered requests.
 
     The granularity comes from the notice itself — one request per numbered
     item, in whichever supported style the notice uses. Nothing is merged,
-    nothing is invented; a format outside the supported styles is refused
-    with its name, never guessed at.
+    nothing is invented; a layout outside the supported styles is refused
+    with the file's name and the layouts that would work, never guessed at.
     """
     # Heading styles first: a notice with request headings often ALSO has a
     # numbered "how to respond" list, and the line-item fallback would
@@ -153,11 +172,10 @@ def parse_notice(notice_text: str) -> list[Request]:
     if requests is None:
         requests = _parse_item_style(notice_text, NUMBERED_ITEM)
     if requests is None:
-        raise ValueError(
-            "could not find the notice's requests — supported styles are "
-            "'### N. Title' headings under '## Evidence requested', "
-            "'Request N:' paragraphs, or 'N.' numbered paragraphs; "
-            "check that the right file was passed; a petition document is "
-            "not a notice"
-        )
-    return requests
+        raise ValueError(UNRECOGNIZED_LAYOUT.format(source_name=source_name))
+    # a notice that restarts its numbering per group prints "1." twice, and two
+    # requests sharing an id would make retrieve() overwrite one with the other
+    return [
+        Request(id=f"R{n}", title=request.title, text=request.text)
+        for n, request in enumerate(requests, start=1)
+    ]
