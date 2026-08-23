@@ -106,7 +106,7 @@ README says what the tool does; this file says why it is the way it is.
 
 ## Verification evidence (all reproducible)
 
-- **129 automated tests, no API key needed** (`python -m pytest tests/`).
+- **135 automated tests, no API key needed** (`python -m pytest tests/`).
 - **Blind testing:** 9 fictional cases written by independent agents that
   were given no knowledge of the parser or scoring — 7 case types (H-1B,
   O-1A, L-1A, I-130 spousal, EB-2 NIW, O-1B arts, E-2 investor, H-1B

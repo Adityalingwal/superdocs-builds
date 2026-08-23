@@ -22,7 +22,7 @@ software, not legal advice, and it never decides eligibility.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest tests/        # 129 tests, all offline
+.venv/bin/python -m pytest tests/        # 135 tests, all offline
 .venv/bin/python rfe.py preview          # parse + coverage checklist for the sample case
 ```
 
@@ -156,7 +156,7 @@ the Markdown copy.
 
 | Claim | Proof |
 |---|---|
-| 129 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
+| 135 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
 | Blind-tested on 9 unseen fictional cases (7 visa types, 7 notice layouts, 62 requests, independent answer keys) | `tests/blind/` |
 | Dangerous misses ("answered" where evidence was missing): 1/62, caught by the human gate in review | blind protocol notes in `NOTES.md` |
 | 5 parser defects found blind were fixed with regression tests | `tests/test_parse_notice_formats.py` |
