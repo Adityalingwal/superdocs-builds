@@ -22,7 +22,7 @@ software, not legal advice, and it never decides eligibility.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest tests/        # 127 tests, all offline
+.venv/bin/python -m pytest tests/        # 129 tests, all offline
 .venv/bin/python rfe.py preview          # parse + coverage checklist for the sample case
 ```
 
@@ -125,7 +125,17 @@ reached, the run refuses the next billable call.
   verbatim, from a real petition file, and none silently removed. The
   comparison is by words — the markdown syntax SuperDocs rewrites on
   export (code fences, backslash escapes, `<br>`) is not mistaken for a
-  changed quote.
+  changed quote. The verdict is written next to the export as
+  `output/verification.md` — filed-ready yes or no, and every failure
+  by name — so the folder answers the question without the terminal.
+
+Everything a run produces lands in `output/`: `checklist.md` (preview),
+`skeleton.md` (the code-built document that was uploaded),
+`pending_changes.md` / `.json` (what is waiting for review),
+`run_state.json` (the session, job and count a pending run resumes
+from; deleted when the run finishes), and after the decision
+`final-response.md`, `final-response.docx` and `verification.md`. Each
+run overwrites the last.
 
 ## SuperDocs surface
 
@@ -146,7 +156,7 @@ the Markdown copy.
 
 | Claim | Proof |
 |---|---|
-| 127 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
+| 129 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
 | Blind-tested on 9 unseen fictional cases (7 visa types, 7 notice layouts, 62 requests, independent answer keys) | `tests/blind/` |
 | Dangerous misses ("answered" where evidence was missing): 1/62, caught by the human gate in review | blind protocol notes in `NOTES.md` |
 | 5 parser defects found blind were fixed with regression tests | `tests/test_parse_notice_formats.py` |

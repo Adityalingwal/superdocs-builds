@@ -603,3 +603,35 @@ def test_changes_that_expired_unapproved_come_back_as_an_unwritten_export(
     assert any("placeholder survived" in f for f in result["verification_failures"])
     assert any("expired unapproved" in note for note in result["notes"])
     assert not (tmp_path / "run_state.json").exists()
+
+
+def test_a_clean_export_leaves_a_filed_ready_verification_record(monkeypatch, tmp_path):
+    requests, lexical = lexical_case()
+    rows = [{"id": r.request_id, "coverage": r.coverage.value, "reason": "f"} for r in lexical]
+    stage_decide(monkeypatch, tmp_path, drafted(build_skeleton(requests, lexical)), rows)
+
+    result = rfe.decide_core(approve_all=True)
+
+    record = (tmp_path / "verification.md").read_text(encoding="utf-8")
+    assert result["verification_file"] == str(tmp_path / "verification.md")
+    assert "FILED-READY: yes" in record
+    assert "(5/5)" in record
+    assert "R4, R5" in record  # the rows the checklist records a gap for
+    assert "session-1" in record and JOB_ID in record
+
+
+def test_a_failed_export_leaves_a_do_not_file_record_naming_each_failure(
+    monkeypatch, tmp_path
+):
+    requests, lexical = lexical_case()
+    rows = [{"id": r.request_id, "coverage": r.coverage.value, "reason": "f"} for r in lexical]
+    export = build_skeleton(requests, lexical)  # placeholders never written
+    stage_decide(monkeypatch, tmp_path, export, rows)
+
+    result = rfe.decide_core(approve_all=True)
+
+    record = (tmp_path / "verification.md").read_text(encoding="utf-8")
+    assert result["filed_ready"] is False
+    assert "FILED-READY: no" in record
+    for failure in result["verification_failures"]:
+        assert failure in record

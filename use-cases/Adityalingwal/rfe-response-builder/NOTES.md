@@ -66,6 +66,12 @@ README says what the tool does; this file says why it is the way it is.
   carrying the server's own closing line, and the export and verification
   run as always. An expired job therefore ends as "placeholder survived —
   do not file", not as an error with the run state left behind.
+- **The verdict lives next to the export.** `output/verification.md`
+  records filed-ready yes/no, the checks that passed or every failure by
+  name, the session and job — written by the same code path on both
+  doors. The terminal line and the MCP result say the same thing, but
+  neither survives a closed window; the attorney opening the folder
+  later must not have to guess.
 - **Graceful degradation.** A judge failure downgrades the run to the
   locator's conservative buckets; slow attachment processing does not
   block the draft; export verification failing marks the output
@@ -100,7 +106,7 @@ README says what the tool does; this file says why it is the way it is.
 
 ## Verification evidence (all reproducible)
 
-- **127 automated tests, no API key needed** (`python -m pytest tests/`).
+- **129 automated tests, no API key needed** (`python -m pytest tests/`).
 - **Blind testing:** 9 fictional cases written by independent agents that
   were given no knowledge of the parser or scoring — 7 case types (H-1B,
   O-1A, L-1A, I-130 spousal, EB-2 NIW, O-1B arts, E-2 investor, H-1B

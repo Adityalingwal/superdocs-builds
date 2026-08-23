@@ -512,9 +512,70 @@ def decide_core(decisions: list[dict] | None = None, approve_all: bool | None = 
     result["verification_failures"] = failures
     result["filed_ready"] = not failures
     result["skipped_files"] = skipped
+    gap_rows = [
+        row.request_id for row in checklist if row.coverage != Coverage.ANSWERED
+    ]
+    result["verification_file"] = str(
+        write_verification_record(state, requests, gap_rows, len(cited), failures, skipped)
+    )
+    notes.append(f"verification written to {result['verification_file']}")
     STATE_FILE.unlink()
     notes.append("run finished and state cleared")
     return result
+
+
+def write_verification_record(
+    state: dict,
+    requests: list,
+    gap_rows: list[str],
+    citations_checked: int,
+    failures: list[str],
+    skipped: list[str],
+) -> Path:
+    """Leave the verdict next to the export, so the output folder answers
+    'is this filed-ready?' on its own — the terminal line is gone once
+    the window closes. The facts here are the ones the checks already
+    computed; nothing is re-judged."""
+    stamp = time.strftime("%Y-%m-%d %H:%M")
+    lines = [
+        f"# Verification — {stamp}",
+        "",
+        f"Session `{state['session_id']}` · job `{state['job_id']}`",
+        f"Export: `final-response.md`, `final-response.docx` (same document)",
+        "",
+    ]
+    if failures:
+        lines.append("**FILED-READY: no — do not file this document.**")
+        lines.append("")
+        lines.append("Failures:")
+        lines.extend(f"- {failure}" for failure in failures)
+    else:
+        lines.append("**FILED-READY: yes.**")
+        lines.append("")
+        lines.append("Checks passed:")
+        lines.append(f"- every request keeps its response section ({len(requests)}/{len(requests)})")
+        lines.append("- no draft placeholder left in the document")
+        lines.append("- every officer quote unaltered")
+        lines.append(
+            "- evidence-gap language present where the checklist records a gap"
+            + (f" ({', '.join(gap_rows)})" if gap_rows else " (none recorded)")
+        )
+        lines.append(
+            f"- {citations_checked} petition citation(s) verbatim, from real "
+            f"petition files, none removed"
+        )
+    if skipped:
+        lines.append("")
+        lines.append(f"Note — {skipped_files_note(skipped)}")
+    lines.append("")
+    lines.append(
+        "Attorney-support draft. Not legal advice. Every section requires "
+        "attorney review before filing."
+    )
+    lines.append("")
+    path = OUT / "verification.md"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
 
 
 def command_check() -> None:
@@ -583,6 +644,7 @@ def command_decide(approve: bool) -> None:
                 "verification passed: all sections drafted, officer quotes "
                 "untouched, gap language intact, petition citations verbatim"
             )
+        print(f"verification record: {result['verification_file']}")
 
 
 def main() -> None:
