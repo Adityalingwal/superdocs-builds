@@ -304,7 +304,9 @@ def test_a_change_too_long_for_the_review_file_says_where_it_was_cut(
     monkeypatch, tmp_path
 ):
     review = review_file_for(
-        monkeypatch, tmp_path, {"change_id": "c1", "new_html": "<p>x</p>" * 600}
+        monkeypatch,
+        tmp_path,
+        {"change_id": "c1", "new_html": "<p>" + "word " * 1200 + "</p>"},
     )
 
     assert rfe.CUT_SHORT_MARKER in review
@@ -320,6 +322,100 @@ def test_a_change_that_fits_the_review_file_carries_no_cut_marker(
     )
 
     assert rfe.CUT_SHORT_MARKER not in review
+
+
+def test_the_review_file_shows_text_not_the_apis_markup(monkeypatch, tmp_path):
+    review = review_file_for(
+        monkeypatch,
+        tmp_path,
+        {
+            "change_id": "c1",
+            "old_html": '<p data-chunk-id="abc-123">[DRAFT RESPONSE FOR R2 — TO BE WRITTEN]</p>',
+            "new_html": '<p data-chunk-id="abc-123">Costs &amp; fees are addressed.</p>',
+        },
+    )
+
+    assert "data-chunk-id" not in review
+    assert "<p" not in review
+    assert "> [DRAFT RESPONSE FOR R2 — TO BE WRITTEN]" in review
+    assert "> Costs & fees are addressed." in review
+
+
+def test_a_change_is_named_by_the_request_its_placeholder_carries(
+    monkeypatch, tmp_path
+):
+    review = review_file_for(
+        monkeypatch,
+        tmp_path,
+        {
+            "change_id": "c1",
+            "old_html": "<p>[DRAFT RESPONSE FOR R3 — TO BE WRITTEN]</p>",
+            "new_html": "<p>text</p>",
+        },
+    )
+
+    assert "## Change 1 — Response to Request R3" in review
+    assert "id `c1`" not in review  # the id lives in pending_changes.json
+
+
+def test_a_reproposal_of_drafted_prose_stays_unlabelled_not_guessed(
+    monkeypatch, tmp_path
+):
+    review = review_file_for(
+        monkeypatch,
+        tmp_path,
+        {"change_id": "c1", "old_html": "<p>Earlier prose.</p>", "new_html": "<p>New prose.</p>"},
+    )
+
+    assert "## Change 1\n" in review
+    assert "Response to Request" not in review
+
+
+def test_a_non_edit_operation_is_said_in_the_heading(monkeypatch, tmp_path):
+    review = review_file_for(
+        monkeypatch,
+        tmp_path,
+        {
+            "change_id": "c1",
+            "operation": "delete",
+            "old_html": "<p>[DRAFT RESPONSE FOR R1 — TO BE WRITTEN]</p>",
+            "new_html": "",
+        },
+    )
+
+    assert "## Change 1 — delete — Response to Request R1" in review
+
+
+def test_an_explanation_that_merely_restates_the_new_text_is_dropped(
+    monkeypatch, tmp_path
+):
+    review = review_file_for(
+        monkeypatch,
+        tmp_path,
+        {
+            "change_id": "c1",
+            "old_html": "<p>[DRAFT RESPONSE FOR R1 — TO BE WRITTEN]</p>",
+            "new_html": "<p>The record shows the degree.</p>",
+            "ai_explanation": "The record shows the degree.",
+        },
+    )
+
+    assert "model's explanation" not in review
+
+
+def test_an_explanation_that_adds_something_is_kept(monkeypatch, tmp_path):
+    review = review_file_for(
+        monkeypatch,
+        tmp_path,
+        {
+            "change_id": "c1",
+            "old_html": "<p>[DRAFT RESPONSE FOR R1 — TO BE WRITTEN]</p>",
+            "new_html": "<p>The record shows the degree.</p>",
+            "ai_explanation": "Filled only the R1 placeholder, honouring the evidence gap.",
+        },
+    )
+
+    assert "model's explanation: Filled only the R1 placeholder" in review
 
 
 def session_ids_seen(calls) -> list[str]:

@@ -27,9 +27,11 @@ doors call the core functions in this file; there is no second
 implementation.
 """
 import json
+import re
 import sys
 import time
 import uuid
+from html import unescape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -144,13 +146,45 @@ def wait_for_attachments(client, session_id: str, notes, max_wait_seconds: int =
     notes.append("attachments still processing — continuing; the skeleton's excerpts carry the draft")
 
 
-def fenced_html(label: str, html: str, limit: int) -> list[str]:
+PLACEHOLDER_REQUEST = re.compile(r"\[DRAFT RESPONSE FOR (R\d+)")
+
+
+def html_to_text(html: str) -> str:
+    """The review file is for the attorney; the chunk-id markup the API
+    wraps a change in is not. Tags out, entities decoded — the raw HTML
+    stays word-for-word in pending_changes.json."""
+    text = re.sub(r"</(?:p|div|li|h[1-6]|tr)>", "\n", html)
+    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+    text = re.sub(r"<[^>]+>", "", text)
+    text = unescape(text)
+    return "\n".join(" ".join(line.split()) for line in text.splitlines() if line.strip())
+
+
+def quoted_block(label: str, html: str, limit: int) -> list[str]:
     # a reviewer who cannot see that the text stops early may approve a change
     # on half of it; the full string is always in pending_changes.json
-    block = [f"**{label}:**", "```html", html[:limit], "```"]
-    if len(html) > limit:
+    text = html_to_text(html)
+    block = [f"**{label}:**", ""]
+    block += [f"> {line}" if line else ">" for line in text[:limit].splitlines()]
+    if len(text) > limit:
         block.append(CUT_SHORT_MARKER)
     return block
+
+
+def change_heading(index: int, change: dict) -> str:
+    """Name the change by the request it belongs to, when the change itself
+    says so — the placeholder carries the request id. A re-proposal's old
+    text is prose, not a placeholder; then the change stays unlabelled
+    rather than guessed. A non-edit operation is said out loud: a deletion
+    must never look like one more edit."""
+    heading = f"## Change {index}"
+    operation = change.get("operation", "edit")
+    if operation != "edit":
+        heading += f" — {operation}"
+    placeholder = PLACEHOLDER_REQUEST.search(str(change.get("old_html", "")))
+    if placeholder:
+        heading += f" — Response to Request {placeholder.group(1)}"
+    return heading
 
 
 def dump_pending_changes(job: dict) -> int:
@@ -158,19 +192,26 @@ def dump_pending_changes(job: dict) -> int:
     (OUT / "pending_changes.json").write_text(
         json.dumps(pending, indent=2), encoding="utf-8"
     )
-    lines = ["# Proposed changes awaiting review", ""]
+    lines = [
+        "# Proposed changes awaiting review",
+        "",
+        "Text only — the raw form of every change, with its change_id, is in",
+        "`pending_changes.json`.",
+        "",
+    ]
     for i, change in enumerate(pending, 1):
-        lines.append(f"## Change {i} — id `{change.get('change_id')}`")
-        lines.append(f"- operation: {change.get('operation', 'Unknown')}")
-        if change.get("ai_explanation"):
-            lines.append(f"- model's explanation: {change['ai_explanation']}")
+        lines.append(change_heading(i, change))
+        explanation = (change.get("ai_explanation") or "").strip()
+        # the model often restates its own text as the "explanation";
+        # a duplicate teaches the reviewer nothing
+        if explanation and not html_to_text(
+            str(change.get("new_html", ""))
+        ).startswith(explanation.rstrip("…").rstrip()):
+            lines.append(f"- model's explanation: {explanation}")
         lines.append("")
-        lines += fenced_html(
-            "Old", str(change.get("old_html", "")), REVIEW_OLD_TEXT_CHARS
-        )
-        lines += fenced_html(
-            "New", str(change.get("new_html", "")), REVIEW_NEW_TEXT_CHARS
-        )
+        lines += quoted_block("Old", str(change.get("old_html", "")), REVIEW_OLD_TEXT_CHARS)
+        lines.append("")
+        lines += quoted_block("New", str(change.get("new_html", "")), REVIEW_NEW_TEXT_CHARS)
         lines.append("")
     (OUT / "pending_changes.md").write_text("\n".join(lines), encoding="utf-8")
     return len(pending)
