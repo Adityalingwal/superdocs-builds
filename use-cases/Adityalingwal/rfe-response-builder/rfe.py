@@ -221,7 +221,10 @@ def decided_elsewhere_detail(job: dict) -> str:
     responses = (job.get("metadata") or {}).get("intermediate_responses") or []
     for response in reversed(responses):
         content = response.get("content") if isinstance(response, dict) else None
-        if isinstance(content, str) and "applied" in content:
+        # the closing line is prose ("Successfully updated all 5 sections",
+        # "5 change(s) expired unapproved"); the JSON entries beside it are
+        # bookkeeping, not a message for a person
+        if isinstance(content, str) and content.strip() and not content.lstrip().startswith("{"):
             return f" — SuperDocs says: {content.strip()}"
     return ""
 
