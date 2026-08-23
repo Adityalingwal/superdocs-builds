@@ -549,3 +549,57 @@ def test_a_run_at_the_cap_refuses_the_next_billable_call(monkeypatch, tmp_path):
         rfe.draft_core(CASE)
 
     assert not any(call["path"] == "/chat/async" for call in calls)
+
+
+def test_a_job_decided_in_the_superdocs_app_still_gets_exported_and_verified(
+    monkeypatch, tmp_path
+):
+    # the reviewer approved everything on the SuperDocs screen: the job is
+    # already completed, so no decision is sent — but the export and the
+    # verification are this tool's job and must still happen
+    requests, lexical = lexical_case()
+    rows = [{"id": r.request_id, "coverage": r.coverage.value, "reason": "f"} for r in lexical]
+    calls, _ = stage_decide(monkeypatch, tmp_path, drafted(build_skeleton(requests, lexical)), rows)
+
+    result = rfe.decide_core(approve_all=True)
+
+    assert result["status"] == "completed"
+    assert result["filed_ready"] is True
+    assert not any(call["path"].endswith("/approve") for call in calls)
+    assert any("already decided outside this run" in note for note in result["notes"])
+    assert not (tmp_path / "run_state.json").exists()
+
+
+def test_changes_that_expired_unapproved_come_back_as_an_unwritten_export(
+    monkeypatch, tmp_path
+):
+    # SuperDocs lets undecided changes expire; the export then still holds
+    # the placeholders, and verification must say so — with the server's
+    # own words on why
+    requests, lexical = lexical_case()
+    rows = [{"id": r.request_id, "coverage": r.coverage.value, "reason": "f"} for r in lexical]
+    calls = []
+    transport = fake_transport(calls, job_status="completed")
+
+    def with_server_message(method, path, body):
+        payload = transport(method, path, body)
+        if path.startswith("/jobs/"):
+            payload["metadata"]["intermediate_responses"] = [
+                {"content": "0 change(s) applied · 5 change(s) expired unapproved and were NOT applied"}
+            ]
+        return payload
+
+    client = install(monkeypatch, tmp_path, with_server_message)
+    skeleton = build_skeleton(requests, lexical)
+    monkeypatch.setattr(client, "export_document", lambda s, f: skeleton.encode("utf-8"))
+    (tmp_path / "run_state.json").write_text(json.dumps(
+        {"session_id": "s", "job_id": JOB_ID, "case_dir": str(CASE), "checklist": rows}
+    ), encoding="utf-8")
+    (tmp_path / "pending_changes.json").write_text(json.dumps([{"change_id": "c1"}]), encoding="utf-8")
+
+    result = rfe.decide_core(approve_all=True)
+
+    assert result["filed_ready"] is False
+    assert any("placeholder survived" in f for f in result["verification_failures"])
+    assert any("expired unapproved" in note for note in result["notes"])
+    assert not (tmp_path / "run_state.json").exists()

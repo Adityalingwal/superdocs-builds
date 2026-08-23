@@ -214,6 +214,18 @@ def save_spent(client: SuperDocsClient, state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
+def decided_elsewhere_detail(job: dict) -> str:
+    """The server's own closing line for a job decided without us — e.g.
+    '0 change(s) applied · 5 change(s) expired unapproved' — so the user
+    sees why the export may come back unwritten."""
+    responses = (job.get("metadata") or {}).get("intermediate_responses") or []
+    for response in reversed(responses):
+        content = response.get("content") if isinstance(response, dict) else None
+        if isinstance(content, str) and "applied" in content:
+            return f" — SuperDocs says: {content.strip()}"
+    return ""
+
+
 def saved_checklist(state: dict, requests: list) -> list[ChecklistRow]:
     rows = state.get("checklist")
     if rows is None:
@@ -433,10 +445,22 @@ def decide_core(decisions: list[dict] | None = None, approve_all: bool | None = 
 
     client = make_client()
     carry_spent(client, state)
-    client.decide_changes(state["session_id"], state["job_id"], decisions)
-    notes = [f"decided {len(decisions)} reviewed change(s)"]
-
+    # the same job can be decided in the SuperDocs app, and SuperDocs lets
+    # undecided changes expire; either way the job is no longer waiting for
+    # us, and sending a decision it cannot take would stop the run short of
+    # the export and the verification
     job = client.wait_for_decision_or_end(state["job_id"], MAX_JOB_WAIT_SECONDS)
+    if job.get("status") == "awaiting_approval":
+        client.decide_changes(state["session_id"], state["job_id"], decisions)
+        notes = [f"decided {len(decisions)} reviewed change(s)"]
+        job = client.wait_for_decision_or_end(state["job_id"], MAX_JOB_WAIT_SECONDS)
+    else:
+        notes = [
+            f"job {state['job_id']} was already decided outside this run "
+            f"(status {job.get('status')}) — in the SuperDocs app, or its "
+            f"proposed changes expired unapproved; continuing to export and "
+            f"verification{decided_elsewhere_detail(job)}"
+        ]
     status = job.get("status")
     note_remaining(client, notes)
     result = {"status": status, "notes": notes, "ops_spent": client.budget.spent}

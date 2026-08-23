@@ -22,7 +22,7 @@ software, not legal advice, and it never decides eligibility.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest tests/        # 125 tests, all offline
+.venv/bin/python -m pytest tests/        # 127 tests, all offline
 .venv/bin/python rfe.py preview          # parse + coverage checklist for the sample case
 ```
 
@@ -47,6 +47,13 @@ second implementation to drift.
 The steps are separate on purpose. `draft` stops at the proposed changes
 and waits — nothing reaches the document until the next step carries an
 explicit decision. That pause is the human gate, not an unfinished step.
+
+The decision can also be made in the SuperDocs app's own Review view —
+it is the same job. Run `decide` afterwards all the same: it sees the job
+is already decided, skips the decision, and does the export and the
+verification. Decide within about 20 minutes — SuperDocs lets proposed
+changes expire unapproved after that, and the export then comes back
+with its sections unwritten, which the verification reports.
 
 ### Door 1 — the command line
 
@@ -139,7 +146,7 @@ the Markdown copy.
 
 | Claim | Proof |
 |---|---|
-| 125 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
+| 127 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
 | Blind-tested on 9 unseen fictional cases (7 visa types, 7 notice layouts, 62 requests, independent answer keys) | `tests/blind/` |
 | Dangerous misses ("answered" where evidence was missing): 1/62, caught by the human gate in review | blind protocol notes in `NOTES.md` |
 | 5 parser defects found blind were fixed with regression tests | `tests/test_parse_notice_formats.py` |

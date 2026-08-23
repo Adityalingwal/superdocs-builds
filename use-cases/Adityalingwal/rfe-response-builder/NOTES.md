@@ -56,6 +56,16 @@ README says what the tool does; this file says why it is the way it is.
   markdown backslash escapes and line-break tags from both sides before
   matching; every word, number and punctuation mark must still match, and
   a changed digit in that same export is still caught.
+- **A job decided elsewhere is still exported and verified.** The same
+  job can be approved in the SuperDocs app, and SuperDocs expires
+  undecided changes on its own; in both cases the job is `completed`
+  before `decide` runs, and sending it a decision answered 400 and
+  stopped the run short of the export (found on a fresh-clone walkthrough,
+  2026-08-23). `decide` now reads the job first: still waiting → the
+  decision is sent; already ended → the decision is skipped with a note
+  carrying the server's own closing line, and the export and verification
+  run as always. An expired job therefore ends as "placeholder survived —
+  do not file", not as an error with the run state left behind.
 - **Graceful degradation.** A judge failure downgrades the run to the
   locator's conservative buckets; slow attachment processing does not
   block the draft; export verification failing marks the output
@@ -90,7 +100,7 @@ README says what the tool does; this file says why it is the way it is.
 
 ## Verification evidence (all reproducible)
 
-- **125 automated tests, no API key needed** (`python -m pytest tests/`).
+- **127 automated tests, no API key needed** (`python -m pytest tests/`).
 - **Blind testing:** 9 fictional cases written by independent agents that
   were given no knowledge of the parser or scoring — 7 case types (H-1B,
   O-1A, L-1A, I-130 spousal, EB-2 NIW, O-1B arts, E-2 investor, H-1B
@@ -161,6 +171,11 @@ README says what the tool does; this file says why it is the way it is.
   markdown byte-for-byte: code fences become inline code, `*` and similar
   characters gain a backslash escape, `<br>` in table cells becomes
   whitespace. Words are preserved; only syntax changes.
+- Proposed changes expire: a job left `awaiting_approval` for about 20
+  minutes completed on its own with "0 change(s) applied · 5 change(s)
+  expired unapproved and were NOT applied" (observed 2026-08-23, 18:15 →
+  18:35). The API reference does not state this lifetime. Twenty minutes
+  is short for an attorney's review.
 - Rejecting a proposed change with feedback triggers a re-proposal round;
   rejecting without feedback is a hard stop — matches prior notes, held
   in practice.

@@ -37,7 +37,13 @@ def test_the_preview_tool_runs_the_same_core_offline():
     assert buckets["R5"] == "not_provided"
 
 
-def test_deciding_without_a_run_names_the_missing_step():
+def test_deciding_without_a_run_names_the_missing_step(tmp_path, monkeypatch):
+    import rfe
+
+    # point at an empty folder: the real output/ may hold a live pending
+    # run, and this test must never touch it
+    monkeypatch.setattr(rfe, "STATE_FILE", tmp_path / "run_state.json")
+    monkeypatch.setattr(rfe, "OUT", tmp_path)
     with pytest.raises(ValueError, match="run a draft first|nothing to decide"):
         mcp_server.decide_changes(approve_all=True)
 
