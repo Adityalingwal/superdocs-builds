@@ -94,12 +94,38 @@ def test_a_reported_charge_of_two_counts_two():
     assert client.budget.spent == 2
 
 
-def test_the_servers_own_monthly_remaining_is_kept_when_it_arrives():
+def test_the_servers_own_remaining_count_is_kept_when_it_arrives():
     client, _ = make_client(
         [{"response": "verdict", "usage": {"ops_charged": 1, "monthly_remaining": 46}}]
     )
     client.ask("s", "judge this", "core")
-    assert client.budget.monthly_remaining == 46
+    assert client.budget.remaining == 46
+
+
+def test_an_active_promotion_is_the_remaining_count_not_the_monthly_plan():
+    # a promotional grant is the bucket actually drawn down; reporting the
+    # untouched monthly figure beside it would mislead
+    client, _ = make_client(
+        [
+            {
+                "response": "verdict",
+                "usage": {
+                    "ops_charged": 0,
+                    "monthly_remaining": 500,
+                    "promotions": [{"name": "grant", "ops_remaining": 9998}],
+                },
+            }
+        ]
+    )
+    client.ask("s", "judge this", "core")
+    assert client.budget.remaining == 9998
+
+
+def test_a_budget_can_start_from_what_earlier_commands_of_the_run_spent():
+    client, _ = make_client([{"usage": {"ops_charged": 1}}])
+    client.budget.spent = 2
+    client.send_edit_instruction("s", "edit", "core")
+    assert client.budget.spent == 3
 
 
 def test_free_calls_are_never_blocked_by_a_spent_budget():

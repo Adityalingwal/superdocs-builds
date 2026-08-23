@@ -22,7 +22,7 @@ software, not legal advice, and it never decides eligibility.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest tests/        # 114 tests, all offline
+.venv/bin/python -m pytest tests/        # 121 tests, all offline
 .venv/bin/python rfe.py preview          # parse + coverage checklist for the sample case
 ```
 
@@ -88,8 +88,11 @@ Leave it out to use the bundled sample case. `decide_changes` takes
 either `approve_all=true` or a per-change list, where feedback on a
 single change makes the model re-propose just that one.
 
-`MAX_OPS_PER_RUN` in `.env` (default 5) caps how many billable calls one
-run may make. Once the cap is reached, the run refuses the next one.
+`MAX_OPS_PER_RUN` in `.env` (default 10) caps how many billable calls one
+run may make — a run being the whole cycle from `draft` to the final
+export. The count is saved in `output/run_state.json` between commands,
+so `decide` carries on from where `draft` stopped. Once the cap is
+reached, the run refuses the next billable call.
 
 ## What it does
 
@@ -133,7 +136,7 @@ the Markdown copy.
 
 | Claim | Proof |
 |---|---|
-| 114 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
+| 121 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
 | Blind-tested on 9 unseen fictional cases (7 visa types, 7 notice layouts, 62 requests, independent answer keys) | `tests/blind/` |
 | Dangerous misses ("answered" where evidence was missing): 1/62, caught by the human gate in review | blind protocol notes in `NOTES.md` |
 | 5 parser defects found blind were fixed with regression tests | `tests/test_parse_notice_formats.py` |

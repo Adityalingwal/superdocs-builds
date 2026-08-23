@@ -17,9 +17,11 @@ README says what the tool does; this file says why it is the way it is.
   re-running resumes the same job rather than paying again. Coverage
   judging uses its own short session.
 - The free tier's operations are protected by a hard cap
-  (`MAX_OPS_PER_RUN`, default 5) counted from the server's own usage
+  (`MAX_OPS_PER_RUN`, default 10) counted from the server's own usage
   fields when present, and floored at 1 for a call we know bills when the
-  server sends no number. It is a floor for the cap, not a bill.
+  server sends no number. It is a floor for the cap, not a bill. The count
+  belongs to the run — draft through every decide round to export — and
+  travels in `run_state.json`, so no command starts it over at zero.
 
 ## Key decisions and why
 
@@ -65,19 +67,21 @@ README says what the tool does; this file says why it is the way it is.
 - The lexical locator's buckets (offline preview) over-score notices that
   quote the petition back ("Evidence submitted: ..."); the judge exists
   precisely because of this, so the preview is labeled locator-only.
-- The operation cap applies **per command**, not per case: the counter is
-  in memory and a fresh `draft` or `decide` starts it at zero. The true
-  running total lives server-side in `monthly_used`.
+- The operation cap counts only what this tool can see: the server's
+  own figure when one is sent, otherwise a floor of one per call known to
+  bill. The true running total lives server-side.
 - The cap's floor can under-count. SuperDocs' docs state one async request
   bills 1 operation per 25 sections edited, so a large document can cost
   more than the 1 the floor adds; and the approve/decide endpoint is not
   flagged billable, so a feedback round that redrafts bills invisibly to
-  us. Neither is guessed at — the Billing tab and `monthly_remaining` (now
-  surfaced in the run notes when the server sends it) are the truth.
+  us. Neither is guessed at — the Billing tab and the server's own
+  remaining count (surfaced in the run notes when it is sent; a
+  promotional grant's balance when one is active, else the monthly plan's)
+  are the truth.
 
 ## Verification evidence (all reproducible)
 
-- **114 automated tests, no API key needed** (`python -m pytest tests/`).
+- **121 automated tests, no API key needed** (`python -m pytest tests/`).
 - **Blind testing:** 9 fictional cases written by independent agents that
   were given no knowledge of the parser or scoring — 7 case types (H-1B,
   O-1A, L-1A, I-130 spousal, EB-2 NIW, O-1B arts, E-2 investor, H-1B
@@ -133,7 +137,12 @@ README says what the tool does; this file says why it is the way it is.
   draft → approve → export run billed exactly 1 operation server-side
   (`monthly_used` 3 → 4) while a usage-only counter read 0 throughout.
   Earlier in this build the block was absent from `/chat` too, so this is
-  partially fixed on their side, not fixed.
+  partially fixed on their side, not fixed. Re-checked 2026-08-23: still
+  absent from `/chat/async`, and `/jobs/{id}` carries no charge field
+  either; `/chat`'s block now also lists active promotional grants
+  (`promotions[].ops_remaining`), which is the bucket actually drawn
+  down. A full draft → feedback round → approve → export cycle that day
+  cost 1 operation from that grant.
 - `GET /v1/attachments/status/{session}`'s `processing_jobs` retains
   completed history; the live signals are `total_processing` /
   `total_ready`.

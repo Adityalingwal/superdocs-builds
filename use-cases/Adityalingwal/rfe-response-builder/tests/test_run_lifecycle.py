@@ -463,3 +463,89 @@ def test_an_angle_bracket_inserted_into_a_quote_is_caught(monkeypatch, tmp_path)
         "Response to Request 3" in failure
         for failure in result["verification_failures"]
     )
+
+
+def pending_run_state_with_spent(tmp_path, spent):
+    state = {
+        "session_id": "session-1",
+        "job_id": "J77",
+        "case_dir": str(CASE),
+        "checklist": [
+            {"id": rid, "coverage": cov, "reason": "fixture"}
+            for rid, cov in ALL_ANSWERED.items()
+        ],
+    }
+    if spent is not None:
+        state["ops_spent"] = spent
+    (tmp_path / "run_state.json").write_text(json.dumps(state), encoding="utf-8")
+    (tmp_path / "pending_changes.json").write_text(
+        json.dumps([{"change_id": "c1"}]), encoding="utf-8"
+    )
+
+
+def test_a_fresh_draft_saves_what_it_spent_into_the_run_state(monkeypatch, tmp_path):
+    calls = []
+    install(monkeypatch, tmp_path, fake_transport(calls, reply=judge_reply(ALL_ANSWERED)))
+
+    result = rfe.draft_core(CASE)
+
+    state = json.loads((tmp_path / "run_state.json").read_text(encoding="utf-8"))
+    # this transport sends no usage block, so each billable call (the judge
+    # question, the async draft) counts its floor of one
+    assert result["ops_spent"] == 2
+    assert state["ops_spent"] == 2
+
+
+def test_decide_continues_the_count_the_draft_left(monkeypatch, tmp_path):
+    # the run's counter spans draft → decide → decide: a decide that opens a
+    # new review round must report and save the running total, not zero
+    pending_run_state_with_spent(tmp_path, spent=3)
+    calls = []
+    install(monkeypatch, tmp_path, fake_transport(calls, pending=[{"change_id": "c2"}]))
+
+    result = rfe.decide_core(approve_all=True)
+
+    assert result["status"] == "awaiting_approval"
+    assert result["ops_spent"] == 3
+    state = json.loads((tmp_path / "run_state.json").read_text(encoding="utf-8"))
+    assert state["ops_spent"] == 3
+
+
+def test_a_resumed_draft_continues_the_count_too(monkeypatch, tmp_path):
+    pending_run_state_with_spent(tmp_path, spent=2)
+    calls = []
+    install(monkeypatch, tmp_path, fake_transport(calls))
+
+    result = rfe.draft_core(CASE)
+
+    assert result["ops_spent"] == 2
+    assert [call["path"] for call in calls] == ["/jobs/J77"]
+
+
+def test_a_run_state_written_before_the_count_existed_reads_as_zero(
+    monkeypatch, tmp_path
+):
+    pending_run_state_with_spent(tmp_path, spent=None)
+    calls = []
+    install(monkeypatch, tmp_path, fake_transport(calls, pending=[{"change_id": "c2"}]))
+
+    result = rfe.decide_core(approve_all=True)
+
+    assert result["ops_spent"] == 0
+
+
+def test_a_run_at_the_cap_refuses_the_next_billable_call(monkeypatch, tmp_path):
+    # the cap is checked against the whole run's count, so a draft that
+    # starts with the cap already spent is refused before anything is sent
+    from superdocs.errors import BudgetExceeded
+
+    pending_run_state_with_spent(tmp_path, spent=5)
+    (tmp_path / "run_state.json").unlink()  # fresh draft, but a pre-spent budget
+    calls = []
+    client = install(monkeypatch, tmp_path, fake_transport(calls), max_ops=5)
+    client.budget.spent = 5
+
+    with pytest.raises(BudgetExceeded):
+        rfe.draft_core(CASE)
+
+    assert not any(call["path"] == "/chat/async" for call in calls)

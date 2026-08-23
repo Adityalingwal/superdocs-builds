@@ -110,7 +110,7 @@ def make_client() -> SuperDocsClient:
     env = read_env(ROOT / ".env")
     return SuperDocsClient(
         env.get("SUPERDOCS_API_KEY", ""),
-        OperationBudget(int(env.get("MAX_OPS_PER_RUN", "5"))),
+        OperationBudget(int(env.get("MAX_OPS_PER_RUN", "10"))),
     )
 
 
@@ -192,13 +192,26 @@ def checklist_rows(checklist) -> list[dict]:
     ]
 
 
-def note_monthly_remaining(client: SuperDocsClient, notes: list[str]) -> None:
-    # the server's own counter, unlike our per-command floor, is the truth
-    if client.budget.monthly_remaining is not None:
+def note_remaining(client: SuperDocsClient, notes: list[str]) -> None:
+    # the server's own count, unlike our floor-of-one estimate, is the truth
+    if client.budget.remaining is not None:
         notes.append(
-            f"SuperDocs reports {client.budget.monthly_remaining} operation(s) "
-            f"left on the monthly plan"
+            f"SuperDocs reports {client.budget.remaining} operation(s) left"
         )
+
+
+def carry_spent(client: SuperDocsClient, state: dict) -> None:
+    """Pick the run's count up from where the last command left it.
+
+    A state file written before the count was saved carries no figure;
+    that reads as zero, never as a refusal to continue the run.
+    """
+    client.budget.spent = int(state.get("ops_spent", 0))
+
+
+def save_spent(client: SuperDocsClient, state: dict) -> None:
+    state["ops_spent"] = client.budget.spent
+    STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
 def saved_checklist(state: dict, requests: list) -> list[ChecklistRow]:
@@ -301,6 +314,7 @@ def draft_core(case_dir: Path) -> dict:
         skipped = unsupported_files(case_dir / "petition")
         if skipped:
             notes.append(skipped_files_note(skipped))
+        carry_spent(client, state)
         notes.append(f"resuming existing job {state['job_id']} — not paying again")
     else:
         # a case folder's name can carry spaces and punctuation that do not
@@ -352,12 +366,12 @@ def draft_core(case_dir: Path) -> dict:
                 for row in checklist
             ],
         }
-        STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        save_spent(client, state)
         notes.append(f"draft requested — job {job_id}")
 
     job = client.wait_for_decision_or_end(state["job_id"], MAX_JOB_WAIT_SECONDS)
     status = job.get("status")
-    note_monthly_remaining(client, notes)
+    note_remaining(client, notes)
     result = {
         "status": status,
         "job_id": state["job_id"],
@@ -418,15 +432,18 @@ def decide_core(decisions: list[dict] | None = None, approve_all: bool | None = 
         ]
 
     client = make_client()
+    carry_spent(client, state)
     client.decide_changes(state["session_id"], state["job_id"], decisions)
     notes = [f"decided {len(decisions)} reviewed change(s)"]
 
     job = client.wait_for_decision_or_end(state["job_id"], MAX_JOB_WAIT_SECONDS)
     status = job.get("status")
-    note_monthly_remaining(client, notes)
+    note_remaining(client, notes)
     result = {"status": status, "notes": notes, "ops_spent": client.budget.spent}
 
     if status == "awaiting_approval":
+        # the run goes on: the next decide must start from this count
+        save_spent(client, state)
         count = dump_pending_changes(job)
         result["pending_changes"] = count
         result["pending_changes_file"] = str(OUT / "pending_changes.md")

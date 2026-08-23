@@ -44,13 +44,16 @@ def read_env(env_path: Path) -> dict[str, str]:
 
 
 class OperationBudget:
-    """Hard cap on billable operations per run, counted from the server's
-    own usage fields — never from our assumptions."""
+    """Hard cap on billable operations per run — one run being the whole
+    cycle from draft to export — counted from the server's own usage
+    fields, never from our assumptions. The count lives in memory while a
+    command runs and in run_state.json between commands, so every command
+    of one run picks up where the last one stopped."""
 
-    def __init__(self, max_ops: int):
+    def __init__(self, max_ops: int, spent: int = 0):
         self.max_ops = max_ops
-        self.spent = 0
-        self.monthly_remaining: int | None = None
+        self.spent = spent
+        self.remaining: int | None = None
 
     def ensure_can_spend(self) -> None:
         if self.spent >= self.max_ops:
@@ -68,8 +71,17 @@ class OperationBudget:
             # is billable costs at least one operation. A reported 0 is left
             # at 0: free judge questions must not be counted against the cap.
             charged = 1 if (billable or usage.get("was_billable")) else 0
-        if usage.get("monthly_remaining") is not None:
-            self.monthly_remaining = usage["monthly_remaining"]
+        # the server reports what is left: a promotional grant when one is
+        # active (that is the bucket being drawn down), else the monthly plan
+        promotions = [
+            p.get("ops_remaining")
+            for p in (usage.get("promotions") or [])
+            if isinstance(p, dict) and p.get("ops_remaining") is not None
+        ]
+        if promotions:
+            self.remaining = sum(int(n) for n in promotions)
+        elif usage.get("monthly_remaining") is not None:
+            self.remaining = int(usage["monthly_remaining"])
         self.spent += int(charged)
 
 
