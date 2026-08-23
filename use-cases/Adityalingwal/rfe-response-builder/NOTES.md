@@ -47,6 +47,15 @@ README says what the tool does; this file says why it is the way it is.
   (mcp_server.py) call the same core functions. The human gate survives
   both doors: drafting stops at proposed changes, and a decision must be
   explicit — approve_all or a per-change list — never implied.
+- **Verification compares words, not markdown.** SuperDocs re-serialises
+  markdown on export: a fenced code block comes back as inline code,
+  `O*NET` comes back as `O\*NET`, a `<br>` inside a table cell comes back
+  as a space. Found live on a blind H-1B case whose petition carried
+  letterhead blocks in code fences — a correct export failed 13 citation
+  checks on formatting alone. The comparison now strips backticks,
+  markdown backslash escapes and line-break tags from both sides before
+  matching; every word, number and punctuation mark must still match, and
+  a changed digit in that same export is still caught.
 - **Graceful degradation.** A judge failure downgrades the run to the
   locator's conservative buckets; slow attachment processing does not
   block the draft; export verification failing marks the output
@@ -81,7 +90,7 @@ README says what the tool does; this file says why it is the way it is.
 
 ## Verification evidence (all reproducible)
 
-- **121 automated tests, no API key needed** (`python -m pytest tests/`).
+- **125 automated tests, no API key needed** (`python -m pytest tests/`).
 - **Blind testing:** 9 fictional cases written by independent agents that
   were given no knowledge of the parser or scoring — 7 case types (H-1B,
   O-1A, L-1A, I-130 spousal, EB-2 NIW, O-1B arts, E-2 investor, H-1B
@@ -148,6 +157,10 @@ README says what the tool does; this file says why it is the way it is.
   `total_ready`.
 - `POST /v1/chat` rejects messages over 100,000 characters (422
   string_too_long).
+- `POST /v1/documents/export` (markdown) does not return the uploaded
+  markdown byte-for-byte: code fences become inline code, `*` and similar
+  characters gain a backslash escape, `<br>` in table cells becomes
+  whitespace. Words are preserved; only syntax changes.
 - Rejecting a proposed change with feedback triggers a re-proposal round;
   rejecting without feedback is a hard stop — matches prior notes, held
   in practice.

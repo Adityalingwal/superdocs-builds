@@ -1,10 +1,26 @@
 import re
 
 
+# markdown punctuation a round trip through SuperDocs rewrites without
+# touching the words: a backslash escape is dropped, a backtick is dropped,
+# an HTML line break inside a table cell becomes whitespace
+MARKDOWN_ESCAPE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|~>])")
+LINE_BREAK_TAG = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
+
 def _normalize(text: str) -> str:
-    # Markdown blockquote markers are formatting, not content: a quote taken
-    # from inside a "> ..." block must still match.
+    """Reduce text to its words so formatting cannot masquerade as a change.
+
+    Markdown blockquote markers, code fences and backslash escapes are
+    formatting, not content: SuperDocs re-serialises them on export (a
+    fenced block comes back as inline code, `O*NET` comes back as
+    `O\\*NET`, a `<br>` in a table cell comes back as a space), and a quote
+    taken from inside a "> ..." block must still match. Every word, number and punctuation mark stays and must match.
+    """
     text = re.sub(r"^\s*>\s?", "", text, flags=re.MULTILINE)
+    text = MARKDOWN_ESCAPE.sub(r"\1", text)
+    text = LINE_BREAK_TAG.sub(" ", text)
+    text = text.replace("`", "")
     return re.sub(r"\s+", " ", text).strip().lower()
 
 

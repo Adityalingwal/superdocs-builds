@@ -22,7 +22,7 @@ software, not legal advice, and it never decides eligibility.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest tests/        # 121 tests, all offline
+.venv/bin/python -m pytest tests/        # 125 tests, all offline
 .venv/bin/python rfe.py preview          # parse + coverage checklist for the sample case
 ```
 
@@ -115,7 +115,10 @@ reached, the run refuses the next billable call.
 - Verifies the export before calling it filed-ready: no surviving
   placeholders, officer quotes untouched, every request keeps its
   section, gap language present per unanswered request, every citation
-  verbatim, from a real petition file, and none silently removed.
+  verbatim, from a real petition file, and none silently removed. The
+  comparison is by words — the markdown syntax SuperDocs rewrites on
+  export (code fences, backslash escapes, `<br>`) is not mistaken for a
+  changed quote.
 
 ## SuperDocs surface
 
@@ -136,7 +139,7 @@ the Markdown copy.
 
 | Claim | Proof |
 |---|---|
-| 121 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
+| 125 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
 | Blind-tested on 9 unseen fictional cases (7 visa types, 7 notice layouts, 62 requests, independent answer keys) | `tests/blind/` |
 | Dangerous misses ("answered" where evidence was missing): 1/62, caught by the human gate in review | blind protocol notes in `NOTES.md` |
 | 5 parser defects found blind were fixed with regression tests | `tests/test_parse_notice_formats.py` |

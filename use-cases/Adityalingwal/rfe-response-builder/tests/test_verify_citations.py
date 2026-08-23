@@ -55,3 +55,27 @@ def test_clean_citations_produce_no_failures(petition):
         petition,
     )
     assert failures == []
+
+
+def test_a_code_fence_the_export_rewrote_as_inline_code_still_matches():
+    # SuperDocs re-serialises markdown on export: a fenced block in the
+    # petition comes back as inline code — same words, different syntax
+    source = "Letterhead:\n```\nLARKSPUR ANALYTICS GROUP, INC.\nSuite 620\n```\nDear Devika,"
+    quote = "`LARKSPUR ANALYTICS GROUP, INC. Suite 620` Dear Devika,"
+    assert citation_is_verbatim(quote, source)
+
+
+def test_a_backslash_escape_the_export_added_still_matches():
+    source = "SOC (O*NET/OES) code 15-2051.00"
+    assert citation_is_verbatim("SOC (O\\*NET/OES) code 15-2051.00", source)
+
+
+def test_formatting_tolerance_does_not_let_a_changed_word_through():
+    source = "```\nSOC (O*NET/OES) code 15-2051.00\n```"
+    assert not citation_is_verbatim("`SOC (O*NET/OES) code 15-2052.00`", source)
+    assert not citation_is_verbatim("`SOC (O*NET/OES) code 15-2051.00 confirmed`", source)
+
+
+def test_a_table_cell_line_break_the_export_turned_into_a_space_still_matches():
+    source = "| Site | (a) Suite 620 — headquarters<br>(b) 22 Harkin Row — client site |"
+    assert citation_is_verbatim("(a) Suite 620 — headquarters (b) 22 Harkin Row — client site", source)
