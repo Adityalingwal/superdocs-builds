@@ -8,7 +8,7 @@ import re
 
 from engine.model import ChecklistRow, Coverage, Request
 from engine.response_skeleton import DRAFT_PLACEHOLDER_PREFIX
-from engine.verify_citations import _normalize
+from engine.verify_citations import _normalize, contains_verbatim
 
 RESPONSE_HEADING = re.compile(r"^#{1,6}\s+Response to Request\s+(\d+)\b")
 SECTION_BOUNDARY = re.compile(r"^#{1,2}\s+")
@@ -70,8 +70,7 @@ def verify_export(
                 f"{request.id}'s response section is missing from the export — "
                 f"every request in the notice must keep its section"
             )
-        quote = _normalize(request.text)
-        if quote not in _normalize(slices.get(request.id, "")):
+        if not contains_verbatim(request.text, slices.get(request.id, "")):
             failures.append(
                 f"{request.id}'s officer quote was altered by editing — the "
                 f"notice text is read-only input and must survive verbatim"

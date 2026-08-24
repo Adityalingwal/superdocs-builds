@@ -79,3 +79,15 @@ def test_formatting_tolerance_does_not_let_a_changed_word_through():
 def test_a_table_cell_line_break_the_export_turned_into_a_space_still_matches():
     source = "| Site | (a) Suite 620 — headquarters<br>(b) 22 Harkin Row — client site |"
     assert citation_is_verbatim("(a) Suite 620 — headquarters (b) 22 Harkin Row — client site", source)
+
+
+def test_a_table_cell_line_break_the_export_deleted_entirely_still_matches():
+    # since SuperDocs' 2026-08 update the export drops the <br> instead of
+    # turning it into a space, joining the words around it
+    source = "| Address | 123 Main St<br>Suite 4 |"
+    assert citation_is_verbatim("123 Main StSuite 4", source)
+
+
+def test_the_deleted_line_break_tolerance_does_not_let_a_changed_word_through():
+    source = "| Address | 123 Main St<br>Suite 4 |"
+    assert not citation_is_verbatim("123 Main StSuite 5", source)

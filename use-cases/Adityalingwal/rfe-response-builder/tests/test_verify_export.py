@@ -159,6 +159,20 @@ def test_a_long_officer_request_is_quoted_and_verified_in_full_not_trimmed():
     assert verify_export(export, [request], checklist) == []
 
 
+def test_an_officer_quote_whose_line_break_the_export_deleted_still_passes():
+    request = Request(
+        id="R1",
+        title="Premises",
+        text="Confirm the work sites: 123 Main St<br>Suite 4, Dover.",
+    )
+    checklist = [answered_row(request)]
+    export = drafted(build_skeleton([request], checklist)).replace(
+        "123 Main St<br>Suite 4", "123 Main StSuite 4"
+    )
+
+    assert verify_export(export, [request], checklist) == []
+
+
 def test_a_word_changed_beyond_the_old_trim_point_is_still_caught():
     request = Request(id="R1", title="Long request", text=LONG_REQUEST_TEXT)
     checklist = [answered_row(request)]
