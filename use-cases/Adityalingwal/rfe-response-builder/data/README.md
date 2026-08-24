@@ -1,4 +1,4 @@
-# Synthetic test corpus — fictional H-1B RFE case
+# Sample case — a fictional H-1B RFE
 
 Everything in this folder is fictional, written for the SuperDocs Round 2
 task. No real person, employer, petition, or government notice is involved.
@@ -12,10 +12,10 @@ The names, dates, receipt numbers, and addresses are invented.
 - The officer's notice: `notice/rfe-notice-2026-07-30.md`
 - The original petition documents: `petition/`
 
-## Why the corpus is shaped this way
+## Why the case is shaped this way
 
-The notice contains **five requests**, deliberately spread across the three
-coverage outcomes the builder must prove:
+The notice contains **five requests**, spread on purpose across the three
+coverage outcomes:
 
 | Request | Topic | Petition coverage | Expected checklist bucket |
 |---|---|---|---|
@@ -31,6 +31,5 @@ is not provided.
 
 ## Format note
 
-Files are Markdown for development. The upload path takes them as documents;
-a `.docx`/`.pdf` variant can be generated later if format fidelity needs
-testing.
+Files are Markdown. The parser's `.pdf` and `.docx` handling is proven
+separately, on the blind cases in `tests/blind/`.

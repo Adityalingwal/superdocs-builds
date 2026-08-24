@@ -48,14 +48,15 @@ README says what the tool does; this file says why it is the way it is.
   both doors: drafting stops at proposed changes, and a decision must be
   explicit — approve_all or a per-change list — never implied.
 - **Verification compares words, not markdown.** SuperDocs re-serialises
-  markdown on export: a fenced code block comes back as inline code,
-  `O*NET` comes back as `O\*NET`, a `<br>` inside a table cell comes back
-  as a space. Found live on a blind H-1B case whose petition carried
-  letterhead blocks in code fences — a correct export failed 13 citation
-  checks on formatting alone. The comparison now strips backticks,
-  markdown backslash escapes and line-break tags from both sides before
-  matching; every word, number and punctuation mark must still match, and
-  a changed digit in that same export is still caught.
+  markdown on export — found live on a blind H-1B case whose petition
+  carried letterhead blocks in code fences: a correct export failed 13
+  citation checks on formatting alone. What the export rewrites has
+  itself changed once already (code fences stopped being rewritten in
+  SuperDocs' 2026-08 update, and a `<br>` in a table cell, once a space,
+  now disappears), so the comparison strips backticks, markdown backslash
+  escapes and line-break tags from both sides and accepts a `<br>` read
+  either as a space or as deleted; every word, number and punctuation
+  mark must still match, and a changed digit is still caught.
 - **A job decided elsewhere is still exported and verified.** The same
   job can be approved in the SuperDocs app, and SuperDocs expires
   undecided changes on its own; in both cases the job is `completed`
@@ -106,7 +107,7 @@ README says what the tool does; this file says why it is the way it is.
 
 ## Verification evidence (all reproducible)
 
-- **135 automated tests, no API key needed** (`python -m pytest tests/`).
+- **138 automated tests, no API key needed** (`python -m pytest tests/`).
 - **Blind testing:** 9 fictional cases written by independent agents that
   were given no knowledge of the parser or scoring — 7 case types (H-1B,
   O-1A, L-1A, I-130 spousal, EB-2 NIW, O-1B arts, E-2 investor, H-1B
@@ -162,7 +163,7 @@ README says what the tool does; this file says why it is the way it is.
   draft → approve → export run billed exactly 1 operation server-side
   (`monthly_used` 3 → 4) while a usage-only counter read 0 throughout.
   Earlier in this build the block was absent from `/chat` too, so this is
-  partially fixed on their side, not fixed. Re-checked 2026-08-23: still
+  partially fixed on their side, not fixed. Re-checked 2026-08-24: still
   absent from `/chat/async`, and `/jobs/{id}` carries no charge field
   either; `/chat`'s block now also lists active promotional grants
   (`promotions[].ops_remaining`), which is the bucket actually drawn
@@ -172,16 +173,20 @@ README says what the tool does; this file says why it is the way it is.
   completed history; the live signals are `total_processing` /
   `total_ready`.
 - `POST /v1/chat` rejects messages over 100,000 characters (422
-  string_too_long).
+  string_too_long; re-checked 2026-08-25).
 - `POST /v1/documents/export` (markdown) does not return the uploaded
-  markdown byte-for-byte: code fences become inline code, `*` and similar
-  characters gain a backslash escape, `<br>` in table cells becomes
-  whitespace. Words are preserved; only syntax changes.
-- Proposed changes expire: a job left `awaiting_approval` for about 20
-  minutes completed on its own with "0 change(s) applied · 5 change(s)
-  expired unapproved and were NOT applied" (observed 2026-08-23, 18:15 →
-  18:35). The API reference does not state this lifetime. Twenty minutes
-  is short for an attorney's review.
+  markdown byte-for-byte. Re-probed 2026-08-25, after SuperDocs' fidelity
+  update: code fences now survive (earlier they came back as inline
+  code), `*` and similar characters still gain a backslash escape, and a
+  `<br>` in a table cell now disappears entirely — the words around it
+  come back joined. Words are otherwise preserved; only syntax changes.
+- Proposed changes used to expire: a job left `awaiting_approval` for
+  about 20 minutes completed on its own with "0 change(s) applied · 5
+  change(s) expired unapproved and were NOT applied" (observed
+  2026-08-23, 18:15 → 18:35); the API reference did not state this
+  lifetime. Re-tested 2026-08-25: a job left awaiting approval was still
+  waiting after 40 minutes — the ~20-minute expiry no longer holds.
+  Whether changes still expire on a longer clock was not observed.
 - Rejecting a proposed change with feedback triggers a re-proposal round;
   rejecting without feedback is a hard stop — matches prior notes, held
   in practice.

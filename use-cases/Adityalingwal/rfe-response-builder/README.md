@@ -8,27 +8,14 @@ pages. This tool reads the officer's notice, splits it into the individual
 requests, finds the petition material that answers each one, and drives
 SuperDocs to draft a response section per request — then stops at a human
 review gate. Nothing is applied or exported until a person approves the
-proposed changes, and the export is verified (quotes verbatim, citations
-real and complete, evidence gaps stated honestly) before it is ever called
-filed-ready.
+proposed changes. Before the result is ever called filed-ready, the export
+is verified: quotes verbatim, citations real and complete, evidence gaps
+stated honestly.
 
 Built for the SuperDocs engineering task. It is attorney-support drafting
 software, not legal advice, and it never decides eligibility.
 
 ![System flow](docs/flow-diagram.svg)
-
-## Quick start (offline — no API key, spends nothing)
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest tests/        # 135 tests, all offline
-.venv/bin/python rfe.py preview          # parse + coverage checklist for the sample case
-```
-
-`preview` reads the bundled fictional H-1B case in `data/` and writes
-`output/checklist.md` — one row per officer request, with the petition
-sections it located and a coverage verdict.
 
 ## Two doors, one core
 
@@ -40,7 +27,7 @@ second implementation to drift.
 |---|---|---|---|
 | Is the key valid | `rfe.py check` | `check_key()` | no |
 | Parse the notice, build the coverage checklist | `rfe.py preview` | `preview_case()` | no |
-| Have the model judge coverage | `rfe.py judge` | `judge_coverage()` | yes |
+| Have the model judge coverage | `rfe.py judge` | `judge_coverage()` | should bill; has charged 0 so far |
 | Upload and draft, then stop for review | `rfe.py draft` | `draft_response()` | yes |
 | Carry the decision, export, verify | `rfe.py decide approve` (all or nothing) | `decide_changes()` (all, or change by change) | sometimes |
 
@@ -49,15 +36,18 @@ and waits — nothing reaches the document until the next step carries an
 explicit decision. That pause is the human gate, not an unfinished step.
 
 The decision can also be made in the SuperDocs app's own Review view —
-it is the same job. Run `decide` afterwards all the same: it sees the job
-is already decided, skips the decision, and does the export and the
-verification. Decide within about 20 minutes — SuperDocs lets proposed
-changes expire unapproved after that, and the export then comes back
-with its sections unwritten, which the verification reports.
+it is the same job. Even then, run `decide` once at the end: it notices
+the decision is already made, so it only downloads the export and
+verifies it.
 
 ### Door 1 — the command line
 
 ```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pytest tests/        # 138 tests, all offline — no API key
+.venv/bin/python rfe.py preview          # parse + coverage checklist (free, offline)
+
 cp .env.example .env      # put your real key in .env — never commit it
 .venv/bin/python rfe.py check             # key valid? (free)
 .venv/bin/python rfe.py judge             # AI coverage judgement
@@ -65,7 +55,9 @@ cp .env.example .env      # put your real key in .env — never commit it
 .venv/bin/python rfe.py decide approve    # or reject; then export + verify
 ```
 
-Run these one at a time.
+Run these one at a time. `preview` reads the bundled fictional H-1B case
+in `data/` and writes `output/checklist.md` — one entry per officer
+request, with the petition sections it located and a coverage verdict.
 
 ### Door 2 — an MCP client
 
@@ -109,8 +101,8 @@ reached, the run refuses the next billable call.
   word-overlap retrieval — every match can be traced to the words that
   produced it. Petition files in any other format are skipped, and the
   run lists them by name so nothing drops silently.
-- Has the model judge coverage per request (answered / partially / not
-  provided), then code verifies the judgement: an "answered" with no
+- Has SuperDocs' model judge coverage per request (answered / partially /
+  not provided), then code verifies the judgement: an "answered" with no
   located material is overridden to "not provided".
 - Builds the response skeleton in code — structure, officer quotes,
   citations, coverage table are deterministic; the model only writes
@@ -121,11 +113,12 @@ reached, the run refuses the next billable call.
   takes.
 - Verifies the export before calling it filed-ready: no surviving
   placeholders, officer quotes untouched, every request keeps its
-  section, gap language present per unanswered request, every citation
-  verbatim, from a real petition file, and none silently removed. The
-  comparison is by words — the markdown syntax SuperDocs rewrites on
-  export (code fences, backslash escapes, `<br>`) is not mistaken for a
-  changed quote. The verdict is written next to the export as
+  section, every unanswered request's section says its evidence is
+  missing, every citation verbatim, from a real petition file, and none
+  silently removed. The
+  comparison is by words — markdown syntax SuperDocs rewrites on export
+  (a `*` gains a backslash, a `<br>` in a table cell disappears) is not
+  mistaken for a changed quote. The verdict is written next to the export as
   `output/verification.md` — filed-ready yes or no, and every failure
   by name — so the folder answers the question without the terminal.
 
@@ -139,24 +132,24 @@ run overwrites the last.
 
 ## SuperDocs surface
 
-| Call | Used for | Billable |
-|---|---|---|
-| `POST /documents/upload-base64` | skeleton upload | no |
-| `POST /attachments/upload-base64` | petition sources ride along | no |
-| `POST /chat` | coverage judgement | flagged; observed charged 0 |
-| `POST /chat/async` | drafting and re-drafting | yes |
-| `GET /jobs/{id}` | polling the draft job | no |
-| `POST /chat/{session}/approve` | the human decision | not flagged; a feedback round that redrafts may bill (see limitations) |
-| `POST /documents/export` | markdown + docx out | no |
+| Call | Used for |
+|---|---|
+| `POST /documents/upload-base64` | uploading the skeleton |
+| `POST /attachments/upload-base64` | attaching the petition documents |
+| `POST /chat` | the coverage judgement |
+| `POST /chat/async` | drafting and re-drafting |
+| `GET /jobs/{id}` | polling the draft job |
+| `POST /chat/{session}/approve` | carrying the human decision |
+| `POST /documents/export` | downloading the final document |
 
-Both files are the same document exported by SuperDocs; the checks read
-the Markdown copy.
+The export returns the same document twice — once as `.md`, once as
+`.docx`. The verification checks read the `.md` copy.
 
 ## Evidence
 
 | Claim | Proof |
 |---|---|
-| 135 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
+| 138 automated tests, no key, no network | `.venv/bin/python -m pytest tests/` |
 | Blind-tested on 9 unseen fictional cases (7 visa types, 7 notice layouts, 62 requests, independent answer keys) | `tests/blind/` |
 | Dangerous misses ("answered" where evidence was missing): 1/62, caught by the human gate in review | blind protocol notes in `NOTES.md` |
 | 5 parser defects found blind were fixed with regression tests | `tests/test_parse_notice_formats.py` |
@@ -167,27 +160,27 @@ the Markdown copy.
 
 - No OCR — scanned, image-only PDFs are refused, not read. Legacy `.doc`
   is not supported (`.docx` is).
-- The last request ends at the first all-caps line (heading styles) or
-  the first blank paragraph (list styles), so trailing text of the last
-  request can be cut — check the last request's officer quote in the
-  checklist.
-- Very terse notices bias the locator toward "partially" — deliberately
-  conservative: a false "partial" costs one extra look, a false
-  "answered" gives false comfort before a legal deadline.
-- On very large cases the coverage judge reads capped excerpts (the chat
-  API's 100k-character message limit, discovered live).
+- There is no next request after the last one to mark where it ends, so
+  the parser stops at the first all-caps line (heading-style notices) or
+  the first blank paragraph (list-style). The end of the last request
+  can get cut — check its officer quote in the checklist.
+- A very short notice gives the locator few words to match, so it says
+  "partially" more often. That direction is chosen on purpose: a false
+  "partially" costs one extra look, a false "answered" gives false
+  comfort before a legal deadline.
+- The chat API takes at most 100,000 characters per message. On a very
+  large case the whole petition does not fit, so the judge reads shorter
+  excerpts per request.
 - One active run at a time: drafting a second case while one is pending
   is refused with instructions, not queued.
 - The operation counter is an estimate, not a bill. The drafting
-  endpoint does not report what it charged, so the tool counts a minimum
-  instead of the real number — check the SuperDocs Billing tab for the
-  actual spend.
+  endpoint does not report what it charged, so the tool counts 1 for
+  that call instead of the real number.
 
 ## Data & privacy
 
-Everything in `data/`, `tests/`, and the sample outputs is fictional and
-marked as such — invented people, employers, and filings, written for
-this task. Real client documents must never enter this repository.
+Everything in `data/` and `tests/` is fictional and marked as such —
+invented people, employers, and filings, written for this task.
 
 ## Built by
 

@@ -30,7 +30,7 @@
 
   <!-- 4 judge -->
   <rect x="130" y="374" width="500" height="80" rx="10" fill="#ffedd5" stroke="#ea580c" stroke-width="1.5"/>
-  <text x="380" y="400" text-anchor="middle" font-size="15" font-weight="bold" fill="#111">4. JUDGE — AI</text>
+  <text x="380" y="400" text-anchor="middle" font-size="15" font-weight="bold" fill="#111">4. JUDGE — SuperDocs AI</text>
   <text x="380" y="420" text-anchor="middle" font-size="13" fill="#444">The model reads each match: fully answered / partially / not provided + why</text>
   <text x="380" y="440" text-anchor="middle" font-size="12" fill="#7c2d12">Code verifies: "answered" with no located material is overridden</text>
   <line x1="380" y1="454" x2="380" y2="478" stroke="#888" stroke-width="2" marker-end="url(#a)"/>
@@ -38,15 +38,15 @@
   <!-- 5 skeleton -->
   <rect x="130" y="481" width="500" height="80" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
   <text x="380" y="507" text-anchor="middle" font-size="15" font-weight="bold" fill="#111">5. SKELETON — code</text>
-  <text x="380" y="527" text-anchor="middle" font-size="13" fill="#444">The response frame: requests quoted, citations placed, checklist built,</text>
-  <text x="380" y="547" text-anchor="middle" font-size="13" fill="#444">answers left as placeholders [DRAFT — TO BE WRITTEN]</text>
+  <text x="380" y="527" text-anchor="middle" font-size="13" fill="#444">Code builds the whole document first: requests quoted, citations placed,</text>
+  <text x="380" y="547" text-anchor="middle" font-size="13" fill="#444">checklist built — only the answers are left as [DRAFT — TO BE WRITTEN]</text>
   <line x1="380" y1="561" x2="380" y2="585" stroke="#888" stroke-width="2" marker-end="url(#a)"/>
 
   <!-- 6 draft -->
   <rect x="130" y="588" width="500" height="80" rx="10" fill="#ffedd5" stroke="#ea580c" stroke-width="1.5"/>
-  <text x="380" y="614" text-anchor="middle" font-size="15" font-weight="bold" fill="#111">6. DRAFT — AI (billable)</text>
+  <text x="380" y="614" text-anchor="middle" font-size="15" font-weight="bold" fill="#111">6. DRAFT — SuperDocs AI (billable)</text>
   <text x="380" y="634" text-anchor="middle" font-size="13" fill="#444">Upload + instruction: "fill the placeholders ONLY from the given material;</text>
-  <text x="380" y="654" text-anchor="middle" font-size="13" fill="#444">where evidence is missing, say 'not provided'" — the AI proposes changes</text>
+  <text x="380" y="654" text-anchor="middle" font-size="13" fill="#444">where evidence is missing, say 'not provided'" — SuperDocs proposes changes</text>
   <line x1="380" y1="668" x2="380" y2="692" stroke="#888" stroke-width="2" marker-end="url(#a)"/>
 
   <!-- 7 human gate -->
@@ -70,7 +70,7 @@
   <text x="380" y="981" text-anchor="middle" font-size="12" fill="#1e3a8a">Result: RFE response package + coverage checklist</text>
 
   <!-- side note -->
-  <text x="380" y="1030" text-anchor="middle" font-size="13" fill="#666">Code splits, locates, verifies · AI judges and writes · the human decides</text>
+  <text x="380" y="1030" text-anchor="middle" font-size="13" fill="#666">Code splits, locates, verifies · SuperDocs' AI judges and writes · the human decides</text>
 
   <defs>
     <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
